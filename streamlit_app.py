@@ -5,7 +5,7 @@ import numpy as np
 import plotly.graph_objects as go
 from streamlit.components.v1 import html
 from datetime import timedelta
-from typing import List
+from typing import List, Tuple
 
 # =========================================================
 # Page config & Global CSS (dark app look)
@@ -92,13 +92,13 @@ st.markdown("""
     <div class="sub">Options analytics & strategy management</div>
   </div>
   <div style="display:flex;gap:8px">
-    <span>v1.0</span>
+    <span>v1.1</span>
   </div>
 </div>
 """, unsafe_allow_html=True)
 
 # =========================================================
-# HELPERS
+# HELPERS (shared)
 # =========================================================
 def parse_blackout_txt(file) -> List[pd.Timestamp]:
     """Parse blackout dates .txt with one date per line, allow comments (#)."""
@@ -124,7 +124,86 @@ def parse_blackout_txt(file) -> List[pd.Timestamp]:
     except Exception:
         return []
 
-def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
+def build_blackout_mask(index: pd.DatetimeIndex, earnings: List[pd.Timestamp], pre: int, post: int) -> np.ndarray:
+    """
+    Efficiently build a boolean mask over index marking blackout intervals around each earnings date.
+    Vectorized OR across ranges.
+    """
+    if not earnings or len(index) == 0:
+        return np.zeros(len(index), dtype=bool)
+    # Normalize index to date (remove time)
+    idx_dates = index.normalize()
+    mask = np.zeros(len(index), dtype=bool)
+    for e in earnings:
+        e_n = pd.Timestamp(e).normalize()
+        start = e_n - pd.Timedelta(days=int(pre))
+        end   = e_n + pd.Timedelta(days=int(post))
+        mask |= (idx_dates >= start) & (idx_dates <= end)
+    return mask
+
+def infer_bars_per_day(index: pd.DatetimeIndex) -> int:
+    """
+    Infer bars per day by grouping timestamps by date and taking the median count.
+    For daily data this should be ~1. For hourly equities ~6-7. Crypto ~24.
+    """
+    if len(index) == 0:
+        return 1
+    # group by normalized date
+    s = pd.Series(1, index=index).groupby(index.normalize()).sum()
+    bpd = int(float(s.median())) if len(s) > 0 else 1
+    return max(bpd, 1)
+
+def lttb_downsample(x: np.ndarray, y: np.ndarray, threshold: int) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Largest-Triangle-Three-Buckets downsampling for plotting large time series.
+    x: numpy array of timestamps (or float x)
+    y: numpy array of values
+    threshold: desired number of points
+    Returns (x_ds, y_ds)
+    """
+    n = len(x)
+    if threshold >= n or threshold <= 0:
+        return x, y
+    # Always include first and last point
+    sampled_x = [x[0]]
+    sampled_y = [y[0]]
+    every = (n - 2) / (threshold - 2)
+    a = 0
+    for i in range(0, threshold - 2):
+        avg_range_start = int(np.floor((i + 1) * every)) + 1
+        avg_range_end = int(np.floor((i + 2) * every)) + 1
+        avg_range_end = min(avg_range_end, n)
+        avg_range_len = max(avg_range_end - avg_range_start, 1)
+        avg_x = np.mean(x[avg_range_start:avg_range_end])
+        avg_y = np.mean(y[avg_range_start:avg_range_end])
+
+        range_offs = int(np.floor(i * every)) + 1
+        range_to = int(np.floor((i + 1) * every)) + 1
+        range_to = min(range_to, n-1)
+
+        # Select point with max triangle area
+        max_area = -1.0
+        next_a = None
+        ax = x[a]; ay = y[a]
+        for j in range(range_offs, range_to+1):
+            area = abs((ax - avg_x) * (y[j] - ay) - (ay - avg_y) * (x[j] - ax))
+            if area > max_area:
+                max_area = area
+                next_a = j
+        if next_a is None:
+            next_a = range_offs
+        sampled_x.append(x[next_a])
+        sampled_y.append(y[next_a])
+        a = next_a
+    sampled_x.append(x[-1])
+    sampled_y.append(y[-1])
+    return np.array(sampled_x), np.array(sampled_y)
+
+# =========================================================
+# INDICATORS (Daily unchanged + Hourly mode-aware)
+# =========================================================
+def compute_indicators_daily(df: pd.DataFrame) -> pd.DataFrame:
+    """Original daily indicator logic unchanged."""
     df = df.copy()
     # Bollinger bands on VWAP (20, 2σ)
     ma = df["vwap"].rolling(20).mean()
@@ -176,6 +255,70 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
+def compute_indicators_hourly(df: pd.DataFrame, bars_per_day: int, days_per_year: int) -> pd.DataFrame:
+    """
+    Hourly indicator logic: same formulas, but windows scaled by bars_per_day and HV annualization by bars_per_day*days_per_year.
+    """
+    df = df.copy()
+    bpd = max(int(bars_per_day), 1)
+    bb_n = 20 * bpd
+    rsi_n = 14 * bpd
+    adx_n = 14 * bpd
+    hv_n  = 21 * bpd
+    annual_factor = np.sqrt(bpd * days_per_year)
+
+    # Bollinger bands on VWAP
+    ma = df["vwap"].rolling(bb_n, min_periods=max(5, int(0.2*bb_n))).mean()
+    std = df["vwap"].rolling(bb_n, min_periods=max(5, int(0.2*bb_n))).std(ddof=0)
+    df["bb_mid"]   = ma
+    df["bb_upper"] = ma + 2.0 * std
+    df["bb_lower"] = ma - 2.0 * std
+
+    # RSI on close (use EWM alpha scaled)
+    delta = df["close"].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    alpha_rsi = 1 / max(rsi_n, 1)
+    avg_gain = gain.ewm(alpha=alpha_rsi, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=alpha_rsi, adjust=False).mean()
+    rs = avg_gain / (avg_loss.replace(0, np.nan))
+    df["rsi"] = (100 - (100 / (1 + rs))).bfill().ffill()
+
+    # ADX (use EWM alpha scaled)
+    up_move   = df["high"].diff()
+    down_move = df["low"].diff() * -1
+    plus_dm  = ((up_move > down_move) & (up_move > 0)) * up_move
+    minus_dm = ((down_move > up_move) & (down_move > 0)) * down_move
+    tr = pd.concat([(df["high"] - df["low"]),
+                    (df["high"] - df["close"].shift()).abs(),
+                    (df["low"] - df["close"].shift()).abs()], axis=1).max(axis=1)
+    alpha_adx = 1 / max(adx_n, 1)
+    atr = tr.ewm(alpha=alpha_adx, adjust=False).mean()
+    plus_di  = 100 * (plus_dm.ewm(alpha=alpha_adx, adjust=False).mean() / atr)
+    minus_di = 100 * (minus_dm.ewm(alpha=alpha_adx, adjust=False).mean() / atr)
+    dx = (abs(plus_di - minus_di) / (plus_di + minus_di).replace(0, np.nan)) * 100
+    df["adx"] = dx.ewm(alpha=alpha_adx, adjust=False).mean().bfill().ffill()
+
+    # VWAP SMA (scaled)
+    df["vwap_sma20"] = df["vwap"].rolling(bb_n, min_periods=max(5, int(0.2*bb_n))).mean()
+
+    # DI lines for "ADX + DI" trend method
+    df["plus_di"] = plus_di
+    df["minus_di"] = minus_di
+
+    # Bollinger width & tightening flag (scaled window)
+    df["bb_width"] = df["bb_upper"] - df["bb_lower"]
+    df["bb_tightening"] = (
+        (df["bb_width"] < df["bb_width"].shift(1)) &
+        (df["bb_width"] < df["bb_width"].rolling(bb_n, min_periods=max(5, int(0.2*bb_n))).median())
+    ).fillna(False)
+
+    # Historical Volatility (rolling hv_n, annualized by sqrt(bpd * days_per_year))
+    log_ret = np.log(df["close"]).diff()
+    df["hv"] = (log_ret.rolling(hv_n).std(ddof=0) * annual_factor * 100).bfill().ffill()
+
+    return df
+
 def compute_trend_flags(df: pd.DataFrame, method: str) -> pd.DataFrame:
     df = df.copy()
     if method == "VWAP Slope":
@@ -194,6 +337,7 @@ def compute_trend_flags(df: pd.DataFrame, method: str) -> pd.DataFrame:
     return df
 
 def in_blackout(day, earnings: List[pd.Timestamp], pre: int, post: int):
+    # Retained for daily path compatibility; hourly path uses vectorized build_blackout_mask
     day_n = pd.Timestamp(day).normalize()
     for e in earnings:
         e_n = pd.Timestamp(e).normalize()
@@ -203,13 +347,34 @@ def in_blackout(day, earnings: List[pd.Timestamp], pre: int, post: int):
             return True
     return False
 
-def next_friday_within(idx, start_loc, max_dte=5):
+def next_friday_within(idx: pd.DatetimeIndex, start_loc: int, max_dte=5):
     end_loc = min(start_loc + max_dte, len(idx) - 1)
     for j in range(start_loc, end_loc + 1):
         if idx[j].weekday() == 4:
             return idx[j]
     return idx[end_loc]
 
+def next_friday_close_within(idx: pd.DatetimeIndex, start_loc: int, max_dte=5) -> pd.Timestamp:
+    """
+    For hourly data: choose the *last* timestamp on the first Friday within window (closest to 'close').
+    If no Friday found, return the last timestamp within window.
+    """
+    end_loc = min(start_loc + max_dte * 24, len(idx) - 1)  # generous cap
+    # Collect all timestamps in the window with weekday==4
+    fridays = []
+    for j in range(start_loc, end_loc + 1):
+        if idx[j].weekday() == 4:
+            fridays.append(idx[j])
+    if not fridays:
+        return idx[end_loc]
+    # Choose the max timestamp of the first Friday date
+    first_friday_date = pd.Timestamp(fridays[0]).normalize()
+    same_day = [t for t in fridays if pd.Timestamp(t).normalize() == first_friday_date]
+    return max(same_day) if same_day else fridays[0]
+
+# =========================================================
+# DAILY BACKTEST (unchanged)
+# =========================================================
 def run_backtest(
     df_raw: pd.DataFrame,
     blackout_dates: List[pd.Timestamp],
@@ -223,7 +388,7 @@ def run_backtest(
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df = df.sort_values("timestamp").set_index("timestamp")
 
-    df = compute_indicators(df)
+    df = compute_indicators_daily(df)
     df = compute_trend_flags(df, trend_method)
 
     # Entry filters incl. HV bounds
@@ -232,7 +397,7 @@ def run_backtest(
     cond_hv  = (df["hv"] >= hv_min) & (df["hv"] <= hv_max)
     combined = cond_adx & cond_rsi & cond_hv
 
-    # Earnings blackout
+    # Earnings blackout (per-row apply; okay for daily path sizes)
     mask_blackout = df.index.to_series().apply(lambda d: in_blackout(d, blackout_dates, days_before, days_after))
     eligible = combined & (~mask_blackout.values)
 
@@ -418,6 +583,234 @@ def run_backtest(
     return df, trades_df, equity_df, summary
 
 # =========================================================
+# HOURLY BACKTEST (optimized, same entry/exit logic)
+# =========================================================
+def run_backtest_hourly(
+    df_raw: pd.DataFrame,
+    blackout_dates: List[pd.Timestamp],
+    hv_min: float, hv_max: float,
+    adx_exit_thr: int, vwap_k: float,
+    use_bias: bool, bias_strength: float,
+    trend_method: str, wing_ext_pct: float,
+    days_before: int, days_after: int,
+    bars_per_day: int,
+    days_per_year: int
+):
+    df = df_raw.copy()
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df = df.sort_values("timestamp").set_index("timestamp")
+
+    # Indicators tuned for hourly
+    df = compute_indicators_hourly(df, bars_per_day=bars_per_day, days_per_year=days_per_year)
+    df = compute_trend_flags(df, trend_method)
+
+    # Filters
+    cond_adx = df["adx"] < 20
+    cond_rsi = (df["rsi"] >= 40) & (df["rsi"] <= 60)
+    cond_hv  = (df["hv"] >= hv_min) & (df["hv"] <= hv_max)
+    combined = cond_adx & cond_rsi & cond_hv
+
+    # Vectorized blackout mask
+    mask_blackout = build_blackout_mask(df.index, blackout_dates, days_before, days_after)
+    eligible = combined & (~mask_blackout)
+
+    # Fees/model params
+    per_leg_fee = 0.65
+    mult = 100
+
+    def round_to(x, step=1.0):
+        return float(np.round(x / step) * step)
+
+    def eval_condor(exp_close, sp, lp, sc, lc, net_credit):
+        put_width = sp - lp
+        call_width = lc - sc
+        if sp <= exp_close <= sc:
+            gross = net_credit * mult
+            fees = 4 * per_leg_fee
+            return gross - fees, 'win'
+        loss_w = call_width if exp_close > sc else put_width
+        gross_loss = (loss_w - net_credit) * mult
+        fees = 4 * per_leg_fee
+        return -gross_loss - fees, 'loss'
+
+    # Use numpy arrays for speed
+    idx = df.index
+    close = df["close"].to_numpy()
+    vwap = df["vwap"].to_numpy()
+    bb_upper = df["bb_upper"].to_numpy()
+    bb_mid   = df["bb_mid"].to_numpy()
+    bb_lower = df["bb_lower"].to_numpy()
+    adx_arr  = df["adx"].to_numpy()
+    trend_up = df["trend_up"].astype(bool).to_numpy()
+    trend_down = df["trend_down"].astype(bool).to_numpy()
+    tightening = df["bb_tightening"].astype(bool).to_numpy()
+    eligible_arr = eligible.to_numpy()
+
+    open_positions = []
+    trades = []
+    cash = 0.0
+    eq_dates = []
+    eq_cash = []
+
+    ADX_EXIT = int(adx_exit_thr)
+    VWAP_ACCEPT_K = float(vwap_k)
+
+    n = len(idx)
+    for i in range(n):
+        d = idx[i]
+
+        # Early exits against positions
+        if open_positions:
+            still_open = []
+            current_close = close[i]
+            adx_exit_now = (adx_arr[i] >= ADX_EXIT)
+
+            # VWAP exit components
+            vwap_today = vwap[i]
+            v_prev = vwap[i-1] if i > 0 else vwap_today
+            delta_today = vwap_today - v_prev
+            delta_prev  = (vwap[i-1] - vwap[i-2]) if i > 1 else 0.0
+            sign_today = np.sign(delta_today)
+            sign_prev  = np.sign(delta_prev)
+            slope_flip = (sign_today != 0) and (sign_prev != 0) and (sign_today != sign_prev)
+            bb_halfwidth = bb_upper[i] - bb_mid[i]
+            accept_dist = VWAP_ACCEPT_K * bb_halfwidth
+            away_enough = abs(current_close - vwap_today) >= accept_dist
+            on_slope_side = ((delta_today > 0 and current_close > vwap_today) or
+                             (delta_today < 0 and current_close < vwap_today))
+            vwap_exit = slope_flip and away_enough and on_slope_side
+
+            for pos in open_positions:
+                pnl_today, _ = eval_condor(current_close, pos["sp"], pos["lp"], pos["sc"], pos["lc"], pos["credit"])
+                breach = (current_close < pos["sp"]) or (current_close > pos["sc"])
+                broke  = (current_close < pos["lp"]) or (current_close > pos["lc"])
+
+                exited = False
+                outcome_flag = None
+                if (d < pos["expiry"]) and broke:
+                    exited = True; outcome_flag = "broke"
+                elif (d < pos["expiry"]) and breach:
+                    exited = True; outcome_flag = "breach"
+                elif (d < pos["expiry"]) and adx_exit_now:
+                    exited = True; outcome_flag = "adx_exit"
+                elif (d < pos["expiry"]) and vwap_exit:
+                    exited = True; outcome_flag = "vwap_exit"
+
+                if exited:
+                    cash += pnl_today
+                    trades.append({
+                        "entry_date": pos["entry"], "expiry_date": d,
+                        "short_put": pos["sp"], "long_put": pos["lp"],
+                        "short_call": pos["sc"], "long_call": pos["lc"],
+                        "net_credit": pos["credit"], "expiry_close": current_close,
+                        "pnl": pnl_today, "outcome": outcome_flag
+                    })
+                else:
+                    still_open.append(pos)
+            open_positions = still_open
+
+        # Expiry settlement at the selected Friday close
+        if open_positions:
+            still_open = []
+            for pos in open_positions:
+                if d == pos["expiry"]:
+                    exp_close = close[i]
+                    pnl, out = eval_condor(exp_close, pos["sp"], pos["lp"], pos["sc"], pos["lc"], pos["credit"])
+                    cash += pnl
+                    trades.append({
+                        "entry_date": pos["entry"], "expiry_date": d,
+                        "short_put": pos["sp"], "long_put": pos["lp"],
+                        "short_call": pos["sc"], "long_call": pos["lc"],
+                        "net_credit": pos["credit"], "expiry_close": exp_close,
+                        "pnl": pnl, "outcome": out
+                    })
+                else:
+                    still_open.append(pos)
+            open_positions = still_open
+
+        # Open new positions (if eligible row)
+        if eligible_arr[i]:
+            # bias shifts strikes if enabled
+            if use_bias:
+                bias = float(bias_strength)
+                if trend_up[i]:
+                    sp = round_to(float(bb_lower[i]) + 0.5 * bias, 1.0)
+                    sc = round_to(float(bb_upper[i]) + 1.0 * bias, 1.0)
+                elif trend_down[i]:
+                    sp = round_to(float(bb_lower[i]) - 1.0 * bias, 1.0)
+                    sc = round_to(float(bb_upper[i]) - 0.5 * bias, 1.0)
+                else:
+                    sp = round_to(float(bb_lower[i]), 1.0)
+                    sc = round_to(float(bb_upper[i]), 1.0)
+            else:
+                sp = round_to(float(bb_lower[i]), 1.0)
+                sc = round_to(float(bb_upper[i]), 1.0)
+
+            # adaptive wing widths on trend transitions + BB tightening
+            prev_up = bool(trend_up[i-1]) if i > 0 else False
+            prev_down = bool(trend_down[i-1]) if i > 0 else False
+            tightening_now = bool(tightening[i])
+
+            ext_factor = 1.0 + max(0.0, float(wing_ext_pct)) / 100.0
+            put_w = 5.0 * ext_factor if (trend_up[i] and prev_down and tightening_now) else 5.0
+            call_w = 5.0 * ext_factor if (trend_down[i] and prev_up and tightening_now) else 5.0
+
+            lp = round_to(sp - put_w, 1.0)
+            lc = round_to(sc + call_w, 1.0)
+            credit = 0.30 * min(call_w, put_w)  # same as GUI
+
+            # Choose expiry at Friday close within window (hourly aware)
+            expiry = next_friday_close_within(idx, i, max_dte=5)
+            open_positions.append({
+                "entry": d, "expiry": expiry,
+                "sp": sp, "lp": lp, "sc": sc, "lc": lc,
+                "credit": credit
+            })
+
+        # log equity
+        eq_dates.append(d)
+        eq_cash.append(cash)
+
+    trades_df = pd.DataFrame(trades)
+    if not trades_df.empty:
+        trades_df["cum_pnl"] = trades_df["pnl"].cumsum()
+
+    equity_df = pd.DataFrame({"date": eq_dates, "cash": eq_cash}).set_index("date") if len(eq_dates) else pd.DataFrame(columns=["cash"])
+
+    # Max drawdown
+    if not equity_df.empty:
+        running_max = equity_df["cash"].cummax()
+        drawdown_mag = running_max - equity_df["cash"]    # >= 0
+        max_dd_val = float(drawdown_mag.max()) if not drawdown_mag.empty else 0.0
+        if max_dd_val > 0 and not running_max.empty:
+            dd_idx = drawdown_mag.idxmax()
+            max_dd_pct = (max_dd_val / running_max.loc[dd_idx]) * 100
+        else:
+            max_dd_pct = 0.0
+    else:
+        max_dd_val = 0.0
+        max_dd_pct = 0.0
+
+    # Summary
+    wins     = int((trades_df["outcome"] == "win").sum())    if not trades_df.empty else 0
+    losses   = int((trades_df["outcome"] == "loss").sum())   if not trades_df.empty else 0
+    breaches = int((trades_df["outcome"] == "breach").sum()) if not trades_df.empty else 0
+    adx_exits= int((trades_df["outcome"] == "adx_exit").sum()) if not trades_df.empty else 0
+    vwap_exits=int((trades_df["outcome"] == "vwap_exit").sum()) if not trades_df.empty else 0
+    brokes   = int((trades_df["outcome"] == "broke").sum())  if not trades_df.empty else 0
+
+    summary = {
+        "trades": int(len(trades_df)),
+        "wins": wins, "losses": losses,
+        "breaches": breaches, "adx_exits": adx_exits, "vwap_exits": vwap_exits, "brokes": brokes,
+        "win_rate": float(100 * wins / len(trades_df)) if not trades_df.empty else 0.0,
+        "total_pnl": float(trades_df["pnl"].sum()) if not trades_df.empty else 0.0,
+        "max_drawdown": max_dd_val, "max_drawdown_pct": max_dd_pct
+    }
+
+    return df, trades_df, equity_df, summary
+
+# =========================================================
 # TOP: Uploads + Settings + Run button (ONE CARD)
 # =========================================================
 st.subheader("Setup")
@@ -436,6 +829,9 @@ with st.container():
         if uploaded_txt is not None:
             st.session_state["uploaded_txt"] = uploaded_txt
 
+        # Timeframe toggle (Daily vs Hourly)
+        timeframe_mode = st.radio("Timeframe", options=["Daily", "Hourly"], horizontal=True)
+
     with col_right:
         hv_min = st.number_input("HV Min (%)", value=35.0)
         hv_max = st.number_input("HV Max (%)", value=75.0)
@@ -448,6 +844,18 @@ with st.container():
         days_before = st.number_input("Days before blackout", value=5)
         days_after = st.number_input("Days after blackout", value=5)
 
+        # Hourly-specific performance/annualization settings
+        if timeframe_mode == "Hourly":
+            st.markdown("**Hourly Settings**")
+            # Infer bars per day from data later; allow override here
+            bars_per_day_override = st.number_input("Bars per day (override)", value=24, help="Use 24 for crypto; ~6-7 for equities. If set to 0, app will infer from data.", min_value=0, max_value=96)
+            days_per_year = st.number_input("Days per year (annualization)", value=252, help="252 for equities trading days, 365 for crypto 24/7.", min_value=200, max_value=366)
+            max_chart_points = st.slider("Max chart points (downsample)", min_value=2000, max_value=30000, value=12000, step=1000)
+        else:
+            bars_per_day_override = 0
+            days_per_year = 252
+            max_chart_points = st.slider("Max chart points (downsample)", min_value=2000, max_value=30000, value=12000, step=1000)
+
         # Presets (client-side localStorage)
         html(f"""
         <div style="display:flex;gap:10px;margin:8px 0;">
@@ -456,11 +864,13 @@ with st.container():
               hv_min:{hv_min}, hv_max:{hv_max}, adx_exit:{adx_exit}, vwap_accept_k:{vwap_accept_k},
               use_trend_bias:{str(use_trend_bias).lower()}, trend_bias_strength:{trend_bias_strength},
               trend_method:'{trend_method}', wing_ext_pct:{wing_ext_pct},
-              days_before:{days_before}, days_after:{days_after}
+              days_before:{days_before}, days_after:{days_after},
+              timeframe_mode:'{timeframe_mode}', bars_per_day_override:{bars_per_day_override}, days_per_year:{days_per_year},
+              max_chart_points:{max_chart_points}
             }};
             localStorage.setItem('icb_preset', JSON.stringify(preset));
             alert('Preset saved');
-          }})()"
+          })()"
           style="background:#152846;border:1px solid #2f4d74;color:#cde1ff;border-radius:8px;padding:8px 12px;">
             Save Preset
           </button>
@@ -470,7 +880,7 @@ with st.container():
             if(!raw) return alert('No preset found');
             const p = JSON.parse(raw);
             alert('Preset loaded (values shown in alert). Apply them in Settings if needed.\\n' + JSON.stringify(p, null, 2));
-          }})()"
+          })()"
           style="background:#0b1221;border:1px solid #35507a;color:#cde1ff;border-radius:8px;padding:8px 12px;">
             Load Preset
           </button>
@@ -484,9 +894,8 @@ with st.container():
 # =========================================================
 # OUTPUTS (compact box ABOVE charts)
 # =========================================================
-# These are populated after run; before run we show a hint
 if not run_clicked:
-    st.info("Upload files, set your parameters above, then press **Run Backtest**.")
+    st.info("Upload files, set your parameters above, choose **Daily** or **Hourly**, then press **Run Backtest**.")
 
 if run_clicked:
     csv_file = st.session_state.get("uploaded_csv")
@@ -529,8 +938,14 @@ if run_clicked:
         ub = ma + 2 * df["close"].rolling(20).std()
         lb = ma - 2 * df["close"].rolling(20).std()
 
+        x = df.index.values
+        y = df["close"].values
+        x_ds, y_ds = lttb_downsample(x.astype("datetime64[ns]").astype(np.int64), y.astype(float), threshold=12000)
+
         fig_px = go.Figure()
-        fig_px.add_trace(go.Scatter(x=df.index, y=df["close"], name="Close Price",
+        # Map back downsampled int64 timestamps to pandas Timestamps
+        ts_ds = pd.to_datetime(x_ds)
+        fig_px.add_trace(go.Scatter(x=ts_ds, y=y_ds, name="Close Price",
                                     mode="lines", line=dict(color="#60A5FA", width=2.5)))
         fig_px.add_trace(go.Scatter(x=df.index, y=ma, name="BB Mid (20)",
                                     mode="lines", line=dict(color="gray", width=1.2)))
@@ -555,16 +970,40 @@ if run_clicked:
         st.stop()
 
     # ---- Full run ----
+    # Infer bars_per_day if hourly and override not set
+    df_raw["timestamp"] = pd.to_datetime(df_raw["timestamp"], errors="coerce")
+    df_sorted = df_raw.dropna(subset=["timestamp"]).sort_values("timestamp")
+
     with st.spinner("Running backtest…"):
-        df_out, trades_df, equity_df, summary = run_backtest(
-            df_raw=df_raw,
-            blackout_dates=blackout_dates,
-            hv_min=hv_min, hv_max=hv_max,
-            adx_exit_thr=adx_exit, vwap_k=vwap_accept_k,
-            use_bias=use_trend_bias, bias_strength=trend_bias_strength,
-            trend_method=trend_method, wing_ext_pct=wing_ext_pct,
-            days_before=days_before, days_after=days_after
-        )
+        if timeframe_mode == "Daily":
+            df_out, trades_df, equity_df, summary = run_backtest(
+                df_raw=df_sorted,
+                blackout_dates=blackout_dates,
+                hv_min=hv_min, hv_max=hv_max,
+                adx_exit_thr=adx_exit, vwap_k=vwap_accept_k,
+                use_bias=use_trend_bias, bias_strength=trend_bias_strength,
+                trend_method=trend_method, wing_ext_pct=wing_ext_pct,
+                days_before=days_before, days_after=days_after
+            )
+            # For chart downsampling
+            bpd_inferred = 1
+        else:
+            # Hourly path
+            idx_sorted = pd.DatetimeIndex(df_sorted["timestamp"].values)
+            bpd_inferred = infer_bars_per_day(idx_sorted)
+            bars_per_day = bars_per_day_override if int(bars_per_day_override) > 0 else bpd_inferred
+
+            df_out, trades_df, equity_df, summary = run_backtest_hourly(
+                df_raw=df_sorted,
+                blackout_dates=blackout_dates,
+                hv_min=hv_min, hv_max=hv_max,
+                adx_exit_thr=adx_exit, vwap_k=vwap_accept_k,
+                use_bias=use_trend_bias, bias_strength=trend_bias_strength,
+                trend_method=trend_method, wing_ext_pct=wing_ext_pct,
+                days_before=days_before, days_after=days_after,
+                bars_per_day=bars_per_day,
+                days_per_year=days_per_year
+            )
 
     # =====================================================
     # OUTPUTS BOX (compact, above charts)
@@ -623,8 +1062,14 @@ if run_clicked:
         if equity_df.empty:
             st.info("No equity curve to display.")
         else:
+            # Downsample equity curve too if huge
+            x_e = equity_df.index.values.astype("datetime64[ns]").astype(np.int64)
+            y_e = equity_df["cash"].values.astype(float)
+            x_e_ds, y_e_ds = lttb_downsample(x_e, y_e, threshold=12000)
+            ts_e_ds = pd.to_datetime(x_e_ds)
+
             fig_eq = go.Figure()
-            fig_eq.add_trace(go.Scatter(x=equity_df.index, y=equity_df["cash"],
+            fig_eq.add_trace(go.Scatter(x=ts_e_ds, y=y_e_ds,
                                         name="Equity", mode="lines", line=dict(color="#22D3EE", width=3)))
             fig_eq.update_layout(template="plotly_dark", margin=dict(l=10, r=10, t=40, b=10),
                                 xaxis_title="", yaxis_title="Cash ($)")
@@ -653,8 +1098,16 @@ if run_clicked:
     # VWAP + Bollinger Bands + trade markers (full-width)
     st.markdown("#### VWAP & Bollinger Bands with Trade Markers")
     fig_px = go.Figure()
-    fig_px.add_trace(go.Scatter(x=df_out.index, y=df_out["vwap"], name="VWAP",
+
+    # Downsample VWAP for plotting if too many points
+    x_full = df_out.index.values.astype("datetime64[ns]").astype(np.int64)
+    vwap_full = df_out["vwap"].values.astype(float)
+    x_ds, vwap_ds = lttb_downsample(x_full, vwap_full, threshold=int(max_chart_points))
+    ts_ds = pd.to_datetime(x_ds)
+
+    fig_px.add_trace(go.Scatter(x=ts_ds, y=vwap_ds, name="VWAP",
                                 mode="lines", line=dict(color="steelblue", width=2)))
+    # Note: bands can be heavy; draw as-is if manageable, else skip downsampling here
     fig_px.add_trace(go.Scatter(x=df_out.index, y=df_out["bb_upper"], name="BB Upper (20,2σ)",
                                 mode="lines", line=dict(color="orange", width=1.5)))
     fig_px.add_trace(go.Scatter(x=df_out.index, y=df_out["bb_mid"], name="BB Mid (20)",
@@ -745,7 +1198,7 @@ else:
       <div style="font-size:16px;font-weight:700;margin-bottom:6px;">Overview</div>
       <div style="color:#c9d4e3;">
         Keep your <b>Uploads</b> and <b>Settings</b> at the top. Click <b>Run Backtest</b> to populate the
-        <b>Outputs</b> box and charts below. No tabs; everything stays on one page.
+        <b>Outputs</b> box and charts below. Toggle <b>Daily / Hourly</b> without changing your core logic.
       </div>
     </div>
     """, unsafe_allow_html=True)
