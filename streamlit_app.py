@@ -1,8 +1,9 @@
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import matplotlib.pyplot as plt
+from streamlit.components.v1 import html
 from datetime import timedelta
 from typing import List
 
@@ -41,6 +42,16 @@ section[data-testid="stSidebar"] { background-color: var(--panel); }
 .header .title { font-size: 22px; font-weight: 700; }
 .header .sub { opacity: .9; }
 
+/* Top nav (single page anchors) */
+.nav {
+  display:flex; gap:16px; margin-top:8px;
+}
+.nav a {
+  color:#cde1ff; text-decoration:none; font-weight:600; font-size:14px;
+  padding-bottom:4px; border-bottom:2px solid transparent;
+}
+.nav a:hover { border-bottom-color:#cde1ff; }
+
 /* Card container */
 .card {
   background: var(--panel);
@@ -67,9 +78,6 @@ section[data-testid="stSidebar"] { background-color: var(--panel); }
   border: none;
 }
 
-/* Tables */
-[data-testid="stTable"] { background: var(--panel2); }
-
 /* Sticky bottom action bar (visual CTA) */
 .sticky-bar{
   position:sticky; bottom:0; background:rgba(12,18,32,.85);
@@ -85,14 +93,24 @@ section[data-testid="stSidebar"] { background-color: var(--panel); }
   background:linear-gradient(90deg,var(--primary),var(--primary2));
   border:none; border-radius:10px; color:#091426; font-weight:800; padding:10px 16px; cursor:pointer;
 }
+
+/* Section anchors spacing */
+.section { scroll-margin-top: 90px; } /* avoid header overlap */
 </style>
 """, unsafe_allow_html=True)
 
+# Header + top nav
 st.markdown("""
 <div class="header">
   <div>
     <div class="title">Iron Condor Backtester</div>
     <div class="sub">Options analytics & strategy management</div>
+    <div class="nav">
+      <a href="#overview">Overview</a>
+      <a href="#uploads">Uploads</a>
+      <a href="#settings">Settings</a>
+      <a href="#results">Results</a>
+    </div>
   </div>
   <div style="display:flex;gap:8px">
     <span>v1.0</span>
@@ -101,106 +119,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =========================================================
-# Tabs
-# =========================================================
-tab_overview, tab_uploads, tab_settings, tab_results = st.tabs(["Overview", "Uploads", "Settings", "Results"])
-
-with tab_overview:
-    st.markdown("""
-    <div class="card">
-      <div style="font-size:16px;font-weight:700;margin-bottom:6px;">Welcome</div>
-      <div style="color:#c9d4e3;">
-        Use the <b>Uploads</b> and <b>Settings</b> tabs to configure, then press <b>Run Backtest</b>.
-        Results will appear under <b>Results</b>.
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-# =========================================================
-# Uploads (styled)
-# =========================================================
-with tab_uploads:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown('<div class="upload-box"><div class="upload-head">Upload CSV</div><div class="upload-help">Drag/drop or browse • Limit 200MB • CSV • Expected columns: timestamp, close, high, low, vwap</div></div>', unsafe_allow_html=True)
-    uploaded_csv = st.file_uploader("Upload CSV", type=["csv"], label_visibility="collapsed")
-
-    st.markdown('<div class="upload-box"><div class="upload-head">Upload Blackout Dates (.txt)</div><div class="upload-help">One date per line (YYYY-MM-DD). Lines starting with # are ignored.</div></div>', unsafe_allow_html=True)
-    uploaded_txt = st.file_uploader("Upload Blackout Dates (.txt)", type=["txt"], label_visibility="collapsed")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# =========================================================
-# Settings (keep your original controls)
-# =========================================================
-with tab_settings:
-    hv_min = st.number_input("HV Min (%)", value=35.0)
-    hv_max = st.number_input("HV Max (%)", value=75.0)
-    adx_exit = st.number_input("ADX Exit ≥", value=25)
-    vwap_accept_k = st.number_input("VWAP Accept k×(BBU−BBM)", value=0.5)
-    use_trend_bias = st.checkbox("Use Trend Bias")
-    trend_bias_strength = st.number_input("Bias Strength", value=2.0, disabled=not use_trend_bias)
-    trend_method = st.selectbox("Trend Method", ["VWAP Slope", "VWAP vs SMA20", "ADX + DI"])
-    wing_ext_pct = st.number_input("Wing Extension %", value=25.0)
-    days_before = st.number_input("Days before blackout", value=5)
-    days_after = st.number_input("Days after blackout", value=5)
-
-    # Presets (client-side localStorage only; no Firebase yet)
-    from streamlit.components.v1 import html
-    html(f"""
-    <div style="display:flex;gap:10px;margin:8px 0;">
-      <!-- IIFE and object braces must be doubled in a Python f-string -->
-      <button onclick="(function(){{ 
-        const preset = {{
-          hv_min:{hv_min}, hv_max:{hv_max}, adx_exit:{adx_exit}, vwap_accept_k:{vwap_accept_k},
-          use_trend_bias:{str(use_trend_bias).lower()}, trend_bias_strength:{trend_bias_strength},
-          trend_method:'{trend_method}', wing_ext_pct:{wing_ext_pct},
-          days_before:{days_before}, days_after:{days_after}
-        }};
-        localStorage.setItem('icb_preset', JSON.stringify(preset));
-        alert('Preset saved');
-      }})()" 
-      style="background:#152846;border:1px solid #2f4d74;color:#cde1ff;border-radius:8px;padding:8px 12px;">
-        Save Preset
-      </button>
-
-      <button onclick="(function(){{ 
-        const raw = localStorage.getItem('icb_preset');
-        if(!raw) return alert('No preset found');
-        const p = JSON.parse(raw);
-        alert('Preset loaded (values shown in alert). Apply them in Settings if needed.\\n' + JSON.stringify(p, null, 2));
-      }})()" 
-      style="background:#0b1221;border:1px solid #35507a;color:#cde1ff;border-radius:8px;padding:8px 12px;">
-        Load Preset
-      </button>
-    </div>
-    """, height=60)
-
-# =========================================================
-# Sticky bottom bar (visual summary & CTA) — braces FIXED
-# =========================================================
-st.markdown(f"""
-<div class="sticky-bar">
-  <div class="sticky-inner">
-    <div style="display:flex;gap:10px;flex-wrap:wrap;">
-      <span class="pill">HV: {hv_min}–{hv_max}%</span>
-      <span class="pill">ADX Exit ≥ {adx_exit}</span>
-      <span class="pill">VWAP κ {vwap_accept_k}</span>
-      <span class="pill">Trend: {trend_method}</span>
-      <span class="pill">Bias: {'On' if use_trend_bias else 'Off'} ({trend_bias_strength if use_trend_bias else '—'})</span>
-      <span class="pill">Wing Ext: {wing_ext_pct}%</span>
-      <span class="pill">Blackout: {days_before}d before / {days_after}d after</span>
-    </div>
-    <div>
-      <!-- Double braces to escape JS object literal -->
-      <button class="cta" onclick="window.scrollTo({{top:0,behavior:'smooth'}})">Run Backtest ↑</button>
-    </div>
-  </div>
-</div>
-""", unsafe_allow_html=True)
-
-# =========================================================
-# Helpers (ported logic)
+# HELPERS
 # =========================================================
 def parse_blackout_txt(file) -> List[pd.Timestamp]:
+    """Parse blackout dates .txt with one date per line, allow comments (#)."""
     if file is None:
         return []
     try:
@@ -483,13 +405,13 @@ def run_backtest(
 
     equity_df = pd.DataFrame(eq).set_index("date") if eq else pd.DataFrame(columns=["cash"])
 
-    # Max drawdown
+    # Max drawdown (positive magnitude in summary)
     if not equity_df.empty:
         running_max = equity_df["cash"].cummax()
-        drawdown = running_max - equity_df["cash"]
-        max_dd_val = float(drawdown.max()) if not drawdown.empty else 0.0
+        drawdown_mag = running_max - equity_df["cash"]    # >= 0
+        max_dd_val = float(drawdown_mag.max()) if not drawdown_mag.empty else 0.0
         if max_dd_val > 0 and not running_max.empty:
-            dd_idx = drawdown.idxmax()
+            dd_idx = drawdown_mag.idxmax()
             max_dd_pct = (max_dd_val / running_max.loc[dd_idx]) * 100
         else:
             max_dd_pct = 0.0
@@ -516,198 +438,403 @@ def run_backtest(
 
     return df, trades_df, equity_df, summary
 
+# =========================================================
+# OVERVIEW (single page)
+# =========================================================
+st.markdown('<div id="overview" class="section"></div>', unsafe_allow_html=True)
+st.subheader("Overview")
+st.markdown("""
+<div class="card">
+  <div style="font-size:16px;font-weight:700;margin-bottom:6px;">Welcome</div>
+  <div style="color:#c9d4e3;">
+    Use <b>Uploads</b> and <b>Settings</b> to configure your backtest, then press <b>Run Backtest</b>.
+    Results appear below under <b>Summary</b>, <b>Drawdown</b>, <b>Loss</b>, <b>Trades</b>, and charts.
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
 # =========================================================
-# Results tab (Run & display everything)
+# UPLOADS
 # =========================================================
-with tab_results:
-    # Main Run button
-    run_clicked = st.button("Run Backtest")
+st.markdown('<div id="uploads" class="section"></div>', unsafe_allow_html=True)
+st.subheader("Uploads")
+st.markdown('<div class="card">', unsafe_allow_html=True)
 
-    if run_clicked:
-        if not uploaded_csv or not uploaded_txt:
-            st.error("Please upload both CSV and blackout dates (.txt) in the Uploads tab.")
+st.markdown('<div class="upload-box"><div class="upload-head">Upload CSV</div><div class="upload-help">Drag/drop or browse • Limit 200MB • CSV • Expected columns: timestamp, close, high, low, vwap</div></div>', unsafe_allow_html=True)
+uploaded_csv = st.file_uploader("Upload CSV", type=["csv"], label_visibility="collapsed")
+if uploaded_csv is not None:
+    st.session_state["uploaded_csv"] = uploaded_csv
+
+st.markdown('<div class="upload-box"><div class="upload-head">Upload Blackout Dates (.txt)</div><div class="upload-help">One date per line (YYYY-MM-DD). Lines starting with # are ignored.</div></div>', unsafe_allow_html=True)
+uploaded_txt = st.file_uploader("Upload Blackout Dates (.txt)", type=["txt"], label_visibility="collapsed")
+if uploaded_txt is not None:
+    st.session_state["uploaded_txt"] = uploaded_txt
+
+st.markdown('</div>', unsafe_allow_html=True)
+
+# =========================================================
+# SETTINGS
+# =========================================================
+st.markdown('<div id="settings" class="section"></div>', unsafe_allow_html=True)
+st.subheader("Settings")
+
+with st.container():
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        hv_min = st.number_input("HV Min (%)", value=35.0)
+        adx_exit = st.number_input("ADX Exit ≥", value=25)
+        use_trend_bias = st.checkbox("Use Trend Bias")
+    with c2:
+        hv_max = st.number_input("HV Max (%)", value=75.0)
+        vwap_accept_k = st.number_input("VWAP Accept k×(BBU−BBM)", value=0.5)
+        trend_bias_strength = st.number_input("Bias Strength", value=2.0, disabled=not use_trend_bias)
+    with c3:
+        trend_method = st.selectbox("Trend Method", ["VWAP Slope", "VWAP vs SMA20", "ADX + DI"])
+        wing_ext_pct = st.number_input("Wing Extension %", value=25.0)
+        days_before = st.number_input("Days before blackout", value=5)
+        days_after = st.number_input("Days after blackout", value=5)
+
+    # Presets (client-side localStorage only)
+    html(f"""
+    <div style="display:flex;gap:10px;margin:8px 0;">
+      <button onclick="(function(){{
+        const preset = {{
+          hv_min:{hv_min}, hv_max:{hv_max}, adx_exit:{adx_exit}, vwap_accept_k:{vwap_accept_k},
+          use_trend_bias:{str(use_trend_bias).lower()}, trend_bias_strength:{trend_bias_strength},
+          trend_method:'{trend_method}', wing_ext_pct:{wing_ext_pct},
+          days_before:{days_before}, days_after:{days_after}
+        }};
+        localStorage.setItem('icb_preset', JSON.stringify(preset));
+        alert('Preset saved');
+      }})()"
+      style="background:#152846;border:1px solid #2f4d74;color:#cde1ff;border-radius:8px;padding:8px 12px;">
+        Save Preset
+      </button>
+
+      <button onclick="(function(){{
+        const raw = localStorage.getItem('icb_preset');
+        if(!raw) return alert('No preset found');
+        const p = JSON.parse(raw);
+        alert('Preset loaded (values shown in alert). Apply them in Settings if needed.\\n' + JSON.stringify(p, null, 2));
+      }})()"
+      style="background:#0b1221;border:1px solid #35507a;color:#cde1ff;border-radius:8px;padding:8px 12px;">
+        Load Preset
+      </button>
+    </div>
+    """, height=60)
+
+# =========================================================
+# Sticky bottom bar (visual summary & CTA)
+# =========================================================
+st.markdown(f"""
+<div class="sticky-bar">
+  <div class="sticky-inner">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+      <span class="pill">HV: {hv_min}–{hv_max}%</span>
+      <span class="pill">ADX Exit ≥ {adx_exit}</span>
+      <span class="pill">VWAP κ {vwap_accept_k}</span>
+      <span class="pill">Trend: {trend_method}</span>
+      <span class="pill">Bias: {'On' if use_trend_bias else 'Off'} ({trend_bias_strength if use_trend_bias else '—'})</span>
+      <span class="pill">Wing Ext: {wing_ext_pct}%</span>
+      <span class="pill">Blackout: {days_before}d before / {days_after}d after</span>
+    </div>
+    <div>
+      <button class="cta" onclick="window.scrollTo({top:0,behavior:'smooth'})">Run Backtest ↑</button>
+    </div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+# =========================================================
+# RESULTS (Run & display)
+# =========================================================
+st.markdown('<div id="results" class="section"></div>', unsafe_allow_html=True)
+st.subheader("Results")
+
+run_clicked = st.button("Run Backtest")
+
+if run_clicked:
+    csv_file = st.session_state.get("uploaded_csv")
+    txt_file = st.session_state.get("uploaded_txt")
+
+    if not csv_file or not txt_file:
+        st.error("Please upload both CSV and blackout dates (.txt) in the Uploads section.")
+        st.stop()
+
+    # Read CSV defensively
+    df_raw = pd.read_csv(csv_file)
+    df_raw.columns = [c.lower() for c in df_raw.columns]
+
+    # Full backtest requires these:
+    required_full = {"timestamp", "close", "high", "low", "vwap"}
+    missing_full = required_full - set(df_raw.columns)
+
+    # Parse blackout dates
+    blackout_dates = parse_blackout_txt(txt_file)
+
+    # Fallback if missing columns
+    if missing_full:
+        st.warning(f"CSV missing columns for full backtest: {sorted(missing_full)}")
+        st.info("Showing basic Bollinger chart on CLOSE. For full logic, include: timestamp, close, high, low, vwap.")
+
+        df_raw["timestamp"] = pd.to_datetime(df_raw.get("timestamp"), errors="coerce")
+        df = df_raw.dropna(subset=["timestamp"]).sort_values("timestamp").set_index("timestamp")
+        if "close" not in df.columns:
+            st.error("CSV must include at least 'close' and 'timestamp' to render the fallback chart.")
             st.stop()
 
-        # Read CSV defensively
-        df_raw = pd.read_csv(uploaded_csv)
-        df_raw.columns = [c.lower() for c in df_raw.columns]
+        # Bollinger on CLOSE
+        ma = df["close"].rolling(20).mean()
+        ub = ma + 2 * df["close"].rolling(20).std()
+        lb = ma - 2 * df["close"].rolling(20).std()
 
-        # Full backtest requires these:
-        required_full = {"timestamp", "close", "high", "low", "vwap"}
-        missing_full = required_full - set(df_raw.columns)
-
-        # Parse blackout dates
-        blackout_dates = parse_blackout_txt(uploaded_txt)
-
-        # If missing columns, show basic Bollinger on CLOSE (fallback), no trades
-        if missing_full:
-            st.warning(f"CSV missing columns for full backtest: {sorted(missing_full)}")
-            st.info("Showing basic Bollinger chart on CLOSE. For full logic, include: timestamp, close, high, low, vwap.")
-
-            df_raw["timestamp"] = pd.to_datetime(df_raw.get("timestamp"), errors="coerce")
-            df = df_raw.dropna(subset=["timestamp"]).sort_values("timestamp").set_index("timestamp")
-            if "close" not in df.columns:
-                st.error("CSV must include at least 'close' and 'timestamp' to render the fallback chart.")
-                st.stop()
-
-            # Bollinger on CLOSE
-            ma = df["close"].rolling(20).mean()
-            ub = ma + 2 * df["close"].rolling(20).std()
-            lb = ma - 2 * df["close"].rolling(20).std()
-
-            fig_px = go.Figure()
-            fig_px.add_trace(go.Scatter(x=df.index, y=df["close"], name="Close Price",
-                                        mode="lines", line=dict(color="#60A5FA", width=2.5)))
-            fig_px.add_trace(go.Scatter(x=df.index, y=ma, name="BB Mid (20)",
-                                        mode="lines", line=dict(color="gray", width=1.2)))
-            fig_px.add_trace(go.Scatter(x=df.index, y=ub, name="BB Upper (20,2σ)",
-                                        mode="lines", line=dict(color="orange", width=1.2)))
-            fig_px.add_trace(go.Scatter(x=df.index, y=lb, name="BB Lower (20,2σ)",
-                                        mode="lines", line=dict(color="orange", width=1.2)))
-            # blackout shading
-            if blackout_dates and len(df) > 0:
-                for e in blackout_dates:
-                    start = e - timedelta(days=int(days_before))
-                    end = e + timedelta(days=int(days_after))
-                    fig_px.add_vrect(x0=start, x1=end, fillcolor="red", opacity=0.08, line_width=0)
-
-            fig_px.update_layout(
-                template="plotly_dark",
-                title="Price with Bollinger Bands (fallback)",
-                margin=dict(l=10, r=10, t=40, b=10),
-                xaxis_title="", yaxis_title="Price ($)",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
-            )
-            st.plotly_chart(fig_px, use_container_width=True)
-
-            # Placeholder metrics
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Trades", "—")
-            m2.metric("Win Rate", "—")
-            m3.metric("Total P&L", "$—")
-            m4.metric("Max Drawdown", "$—", "—%")
-
-            st.write("✅ Backtest (fallback) complete. Add required columns for full logic.")
-            st.stop()
-
-        # Full run
-        with st.spinner("Running backtest…"):
-            df_out, trades_df, equity_df, summary = run_backtest(
-                df_raw=df_raw,
-                blackout_dates=blackout_dates,
-                hv_min=hv_min, hv_max=hv_max,
-                adx_exit_thr=adx_exit, vwap_k=vwap_accept_k,
-                use_bias=use_trend_bias, bias_strength=trend_bias_strength,
-                trend_method=trend_method, wing_ext_pct=wing_ext_pct,
-                days_before=days_before, days_after=days_after
-            )
-
-        # Summary metric cards
-        st.subheader("Summary")
-        m1, m2, m3, m4, m5 = st.columns(5, gap="small")
-        m1.metric("Trades", f"{summary['trades']}")
-        m2.metric("Win Rate", f"{summary['win_rate']:.2f}%")
-        m3.metric("Total P&L", f"${summary['total_pnl']:.2f}")
-        m4.metric("Max Drawdown", f"${summary['max_drawdown']:.2f}", f"{summary['max_drawdown_pct']:.2f}%")
-        m5.metric("Exits (Bre/ADX/VWAP/Broke)", f"{summary['breaches']}/{summary['adx_exits']}/{summary['vwap_exits']}/{summary['brokes']}")
-
-        # Trades table
-        st.subheader("Trades")
-        if trades_df.empty:
-            st.info("No trades generated under current settings.")
-        else:
-            show_df = trades_df.copy()
-            show_df["entry_date"] = pd.to_datetime(show_df["entry_date"])
-            show_df["expiry_date"] = pd.to_datetime(show_df["expiry_date"])
-            st.dataframe(show_df, use_container_width=True, hide_index=True)
-
-        # Equity curve chart
-        st.subheader("Equity Curve")
-        if equity_df.empty:
-            st.info("No equity curve to display.")
-        else:
-            fig_eq = go.Figure()
-            fig_eq.add_trace(go.Scatter(x=equity_df.index, y=equity_df["cash"],
-                                        name="Equity", mode="lines", line=dict(color="#22D3EE", width=3)))
-            fig_eq.update_layout(template="plotly_dark", margin=dict(l=10, r=10, t=40, b=10),
-                                 xaxis_title="", yaxis_title="Cash ($)")
-            st.plotly_chart(fig_eq, use_container_width=True)
-
-        # VWAP + Bollinger Bands + markers
-        st.subheader("VWAP & Bollinger Bands with Trade Markers")
         fig_px = go.Figure()
-        fig_px.add_trace(go.Scatter(x=df_out.index, y=df_out["vwap"], name="VWAP",
-                                    mode="lines", line=dict(color="steelblue", width=2)))
-        fig_px.add_trace(go.Scatter(x=df_out.index, y=df_out["bb_upper"], name="BB Upper (20,2σ)",
-                                    mode="lines", line=dict(color="orange", width=1.5)))
-        fig_px.add_trace(go.Scatter(x=df_out.index, y=df_out["bb_mid"], name="BB Mid (20)",
-                                    mode="lines", line=dict(color="gray", width=1.0)))
-        fig_px.add_trace(go.Scatter(x=df_out.index, y=df_out["bb_lower"], name="BB Lower (20,2σ)",
-                                    mode="lines", line=dict(color="orange", width=1.5)))
-
-        # Blackout shading
-        if blackout_dates:
+        fig_px.add_trace(go.Scatter(x=df.index, y=df["close"], name="Close Price",
+                                    mode="lines", line=dict(color="#60A5FA", width=2.5)))
+        fig_px.add_trace(go.Scatter(x=df.index, y=ma, name="BB Mid (20)",
+                                    mode="lines", line=dict(color="gray", width=1.2)))
+        fig_px.add_trace(go.Scatter(x=df.index, y=ub, name="BB Upper (20,2σ)",
+                                    mode="lines", line=dict(color="orange", width=1.2)))
+        fig_px.add_trace(go.Scatter(x=df.index, y=lb, name="BB Lower (20,2σ)",
+                                    mode="lines", line=dict(color="orange", width=1.2)))
+        # blackout shading
+        if blackout_dates and len(df) > 0:
             for e in blackout_dates:
                 start = e - timedelta(days=int(days_before))
-                end   = e + timedelta(days=int(days_after))
+                end = e + timedelta(days=int(days_after))
                 fig_px.add_vrect(x0=start, x1=end, fillcolor="red", opacity=0.08, line_width=0)
-
-        # Trend overlay (if bias used—like GUI)
-        if use_trend_bias:
-            up_idx = df_out.index[df_out["trend_up"]]
-            down_idx = df_out.index[df_out["trend_down"]]
-            fig_px.add_trace(go.Scatter(x=up_idx, y=df_out.loc[up_idx, "vwap"],
-                                        name="Uptrend", mode="markers",
-                                        marker=dict(color="green", size=5, opacity=0.5), hoverinfo="skip"))
-            fig_px.add_trace(go.Scatter(x=down_idx, y=df_out.loc[down_idx, "vwap"],
-                                        name="Downtrend", mode="markers",
-                                        marker=dict(color="red", size=5, opacity=0.5), hoverinfo="skip"))
-
-        # Entry/Exit markers
-        if not trades_df.empty:
-            wins_m   = (trades_df["outcome"] == "win")
-            losses_m = (trades_df["outcome"] == "loss")
-            breach_m = (trades_df["outcome"] == "breach")
-            adx_m    = (trades_df["outcome"] == "adx_exit")
-            vwap_m   = (trades_df["outcome"] == "vwap_exit")
-            broke_m  = (trades_df["outcome"] == "broke")
-
-            # Entry markers
-            fig_px.add_trace(go.Scatter(
-                x=trades_df.loc[wins_m, "entry_date"],
-                y=df_out.loc[trades_df.loc[wins_m, "entry_date"], "vwap"],
-                name="Entry (win)", mode="markers",
-                marker=dict(symbol="triangle-up", color="green", size=9)
-            ))
-            fig_px.add_trace(go.Scatter(
-                x=trades_df.loc[losses_m, "entry_date"],
-                y=df_out.loc[trades_df.loc[losses_m, "entry_date"], "vwap"],
-                name="Entry (loss)", mode="markers",
-                marker=dict(symbol="triangle-up", color="red", size=9)
-            ))
-            # Exit markers
-            def add_exit(mask, name, color, symbol="x"):
-                fig_px.add_trace(go.Scatter(
-                    x=trades_df.loc[mask, "expiry_date"],
-                    y=df_out.loc[trades_df.loc[mask, "expiry_date"], "close"],
-                    name=name, mode="markers",
-                    marker=dict(symbol=symbol, color=color, size=9)
-                ))
-            add_exit(wins_m, "Exit (win)", "green", "x")
-            add_exit(losses_m, "Exit (loss)", "red", "x")
-            add_exit(breach_m, "Exit (breach)", "red", "triangle-down")
-            add_exit(adx_m, "Exit (ADX)", "purple", "square")
-            add_exit(vwap_m, "Exit (VWAP)", "orange", "diamond")
-            add_exit(broke_m, "Exit (broke)", "black", "star")
 
         fig_px.update_layout(
             template="plotly_dark",
+            title="Price with Bollinger Bands (fallback)",
             margin=dict(l=10, r=10, t=40, b=10),
             xaxis_title="", yaxis_title="Price ($)",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
         )
         st.plotly_chart(fig_px, use_container_width=True)
 
+        # Placeholder metrics
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Trades", "—")
+        m2.metric("Win Rate", "—")
+        m3.metric("Total P&L", "$—")
+        m4.metric("Max Drawdown", "$—", "—%")
+
+        st.write("✅ Backtest (fallback) complete. Add required columns for full logic.")
+        st.stop()
+
+    # Full run
+    with st.spinner("Running backtest…"):
+        df_out, trades_df, equity_df, summary = run_backtest(
+            df_raw=df_raw,
+            blackout_dates=blackout_dates,
+            hv_min=hv_min, hv_max=hv_max,
+            adx_exit_thr=adx_exit, vwap_k=vwap_accept_k,
+            use_bias=use_trend_bias, bias_strength=trend_bias_strength,
+            trend_method=trend_method, wing_ext_pct=wing_ext_pct,
+            days_before=days_before, days_after=days_after
+        )
+
+    # -----------------------------
+    # Summary metric cards
+    # -----------------------------
+    st.subheader("Summary")
+    m1, m2, m3, m4, m5 = st.columns(5, gap="small")
+    m1.metric("Trades", f"{summary['trades']}")
+    m2.metric("Win Rate", f"{summary['win_rate']:.2f}%")
+    m3.metric("Total P&L", f"${summary['total_pnl']:.2f}")
+    m4.metric("Max Drawdown", f"${summary['max_drawdown']:.2f}", f"{summary['max_drawdown_pct']:.2f}%")
+    m5.metric("Exits (Bre/ADX/VWAP/Broke)", f"{summary['breaches']}/{summary['adx_exits']}/{summary['vwap_exits']}/{summary['brokes']}")
+
+    # -----------------------------
+    # Drawdown (SEPARATE SECTION)
+    # -----------------------------
+    st.subheader("Drawdown")
+    if equity_df.empty or len(equity_df) < 2:
+        st.info("No equity curve to compute drawdown.")
     else:
-        st.info("Press **Run Backtest** to generate results (after uploads & settings).")
+        equity_df = equity_df.sort_index()
+        running_peak = equity_df["cash"].cummax()
+        dd_curve = equity_df["cash"] - running_peak                 # ≤ 0
+        dd_pct_curve = (dd_curve / running_peak.replace(0, np.nan)).fillna(0.0) * 100.0
+
+        current_dd = float(dd_curve.iloc[-1])
+        current_dd_pct = float(dd_pct_curve.iloc[-1])
+        max_dd_val = float(dd_curve.min())                          # most negative
+        max_dd_pct = float(dd_pct_curve.min())
+
+        dd1, dd2, dd3 = st.columns(3)
+        dd1.metric("Max Drawdown", f"${abs(max_dd_val):,.2f}", f"{abs(max_dd_pct):.2f}%")
+        dd2.metric("Current Drawdown", f"${abs(current_dd):,.2f}", f"{abs(current_dd_pct):.2f}%")
+        dd3.metric("Peak Equity", f"${running_peak.max():,.2f}")
+
+        fig_dd = go.Figure()
+        fig_dd.add_trace(go.Scatter(
+            x=equity_df.index, y=equity_df["cash"], name="Equity",
+            mode="lines", line=dict(color="#22D3EE", width=2.5)
+        ))
+        fig_dd.add_trace(go.Scatter(
+            x=equity_df.index, y=dd_curve, name="Drawdown",
+            mode="lines", line=dict(color="#F87171", width=2),
+            fill="tozeroy"
+        ))
+        fig_dd.update_layout(
+            template="plotly_dark",
+            margin=dict(l=10, r=10, t=40, b=10),
+            xaxis_title="", yaxis_title="USD",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
+        )
+        st.plotly_chart(fig_dd, use_container_width=True)
+
+    # -----------------------------
+    # Loss (SEPARATE SECTION)
+    # -----------------------------
+    st.subheader("Loss")
+    if trades_df.empty:
+        st.info("No trades to compute loss metrics.")
+    else:
+        df_losses = trades_df[trades_df["pnl"] < 0].copy()
+        total_loss = float(-df_losses["pnl"].sum()) if not df_losses.empty else 0.0
+        num_losses = int(len(df_losses))
+        avg_loss = float((-df_losses["pnl"].mean()) if num_losses else 0.0)
+        worst_loss = float((-df_losses["pnl"].min()) if num_losses else 0.0)
+
+        ls1, ls2, ls3, ls4 = st.columns(4)
+        ls1.metric("Total Loss", f"${total_loss:,.2f}")
+        ls2.metric("# Losing Trades", f"{num_losses}")
+        ls3.metric("Avg Loss", f"${avg_loss:,.2f}")
+        ls4.metric("Worst Loss", f"${worst_loss:,.2f}")
+
+        st.markdown("#### Loss Trades")
+        if df_losses.empty:
+            st.info("No losing trades under current settings.")
+        else:
+            df_losses["entry_date"] = pd.to_datetime(df_losses["entry_date"])
+            df_losses["expiry_date"] = pd.to_datetime(df_losses["expiry_date"])
+            st.dataframe(
+                df_losses.sort_values("entry_date"),
+                use_container_width=True, hide_index=True, height=320
+            )
+
+            # Optional: loss distribution (histogram)
+            hist_counts, hist_bins = np.histogram(-df_losses["pnl"].values, bins=min(20, max(5, num_losses)))
+            fig_hist = go.Figure()
+            fig_hist.add_trace(go.Bar(
+                x=[f"{round(hist_bins[i],2)}–{round(hist_bins[i+1],2)}" for i in range(len(hist_bins)-1)],
+                y=hist_counts, marker=dict(color="#F59E0B"), name="Loss size (USD)"
+            ))
+            fig_hist.update_layout(
+                template="plotly_dark",
+                title="Loss distribution",
+                margin=dict(l=10, r=10, t=40, b=10),
+                xaxis_title="Loss bucket ($)", yaxis_title="Count",
+                showlegend=False
+            )
+            st.plotly_chart(fig_hist, use_container_width=True)
+
+    # -----------------------------
+    # Trades table (full)
+    # -----------------------------
+    st.subheader("Trades")
+    if trades_df.empty:
+        st.info("No trades generated under current settings.")
+    else:
+        show_df = trades_df.copy()
+        show_df["entry_date"] = pd.to_datetime(show_df["entry_date"])
+        show_df["expiry_date"] = pd.to_datetime(show_df["expiry_date"])
+        st.dataframe(show_df, use_container_width=True, hide_index=True)
+
+    # -----------------------------
+    # Equity curve chart (full curve)
+    # -----------------------------
+    st.subheader("Equity Curve")
+    if equity_df.empty:
+        st.info("No equity curve to display.")
+    else:
+        fig_eq = go.Figure()
+        fig_eq.add_trace(go.Scatter(x=equity_df.index, y=equity_df["cash"],
+                                    name="Equity", mode="lines", line=dict(color="#22D3EE", width=3)))
+        fig_eq.update_layout(template="plotly_dark", margin=dict(l=10, r=10, t=40, b=10),
+                             xaxis_title="", yaxis_title="Cash ($)")
+        st.plotly_chart(fig_eq, use_container_width=True)
+
+    # -----------------------------
+    # VWAP + Bollinger Bands + trade markers
+    # -----------------------------
+    st.subheader("VWAP & Bollinger Bands with Trade Markers")
+    fig_px = go.Figure()
+    fig_px.add_trace(go.Scatter(x=df_out.index, y=df_out["vwap"], name="VWAP",
+                                mode="lines", line=dict(color="steelblue", width=2)))
+    fig_px.add_trace(go.Scatter(x=df_out.index, y=df_out["bb_upper"], name="BB Upper (20,2σ)",
+                                mode="lines", line=dict(color="orange", width=1.5)))
+    fig_px.add_trace(go.Scatter(x=df_out.index, y=df_out["bb_mid"], name="BB Mid (20)",
+                                mode="lines", line=dict(color="gray", width=1.0)))
+    fig_px.add_trace(go.Scatter(x=df_out.index, y=df_out["bb_lower"], name="BB Lower (20,2σ)",
+                                mode="lines", line=dict(color="orange", width=1.5)))
+
+    # Blackout shading
+    if blackout_dates:
+        for e in blackout_dates:
+            start = e - timedelta(days=int(days_before))
+            end   = e + timedelta(days=int(days_after))
+            fig_px.add_vrect(x0=start, x1=end, fillcolor="red", opacity=0.08, line_width=0)
+
+    # Trend overlay (if bias used—like GUI)
+    if use_trend_bias:
+        up_idx = df_out.index[df_out["trend_up"]]
+        down_idx = df_out.index[df_out["trend_down"]]
+        fig_px.add_trace(go.Scatter(x=up_idx, y=df_out.loc[up_idx, "vwap"],
+                                    name="Uptrend", mode="markers",
+                                    marker=dict(color="green", size=5, opacity=0.5), hoverinfo="skip"))
+        fig_px.add_trace(go.Scatter(x=down_idx, y=df_out.loc[down_idx, "vwap"],
+                                    name="Downtrend", mode="markers",
+                                    marker=dict(color="red", size=5, opacity=0.5), hoverinfo="skip"))
+
+    # Entry/Exit markers
+    if not trades_df.empty:
+        wins_m   = (trades_df["outcome"] == "win")
+        losses_m = (trades_df["outcome"] == "loss")
+        breach_m = (trades_df["outcome"] == "breach")
+        adx_m    = (trades_df["outcome"] == "adx_exit")
+        vwap_m   = (trades_df["outcome"] == "vwap_exit")
+        broke_m  = (trades_df["outcome"] == "broke")
+
+        # Entry markers
+        fig_px.add_trace(go.Scatter(
+            x=trades_df.loc[wins_m, "entry_date"],
+            y=df_out.loc[trades_df.loc[wins_m, "entry_date"], "vwap"],
+            name="Entry (win)", mode="markers",
+            marker=dict(symbol="triangle-up", color="green", size=9)
+        ))
+        fig_px.add_trace(go.Scatter(
+            x=trades_df.loc[losses_m, "entry_date"],
+            y=df_out.loc[trades_df.loc[losses_m, "entry_date"], "vwap"],
+            name="Entry (loss)", mode="markers",
+            marker=dict(symbol="triangle-up", color="red", size=9)
+        ))
+
+        # Exit markers helper
+        def add_exit(mask, name, color, symbol="x"):
+            fig_px.add_trace(go.Scatter(
+                x=trades_df.loc[mask, "expiry_date"],
+                y=df_out.loc[trades_df.loc[mask, "expiry_date"], "close"],
+                name=name, mode="markers",
+                marker=dict(symbol=symbol, color=color, size=9)
+            ))
+        add_exit(wins_m, "Exit (win)", "green", "x")
+        add_exit(losses_m, "Exit (loss)", "red", "x")
+        add_exit(breach_m, "Exit (breach)", "red", "triangle-down")
+        add_exit(adx_m, "Exit (ADX)", "purple", "square")
+        add_exit(vwap_m, "Exit (VWAP)", "orange", "diamond")
+        add_exit(broke_m, "Exit (broke)", "black", "star")
+
+    fig_px.update_layout(
+        template="plotly_dark",
+        margin=dict(l=10, r=10, t=40, b=10),
+        xaxis_title="", yaxis_title="Price ($)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
+    )
+    st.plotly_chart(fig_px, use_container_width=True)
+
+else:
+    st.info("Configure uploads & settings, then press **Run Backtest** to generate results.")
