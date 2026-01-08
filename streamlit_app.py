@@ -1,11 +1,10 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import matplotlib.pyplot as plt
 from datetime import timedelta
-from typing import List, Optional
+from typing import List
 
 # =========================================================
 # Page config & Global CSS (dark app look)
@@ -148,28 +147,35 @@ with tab_settings:
     from streamlit.components.v1 import html
     html(f"""
     <div style="display:flex;gap:10px;margin:8px 0;">
-      <button onclick="(function(){{
+      <!-- IIFE and object braces must be doubled in a Python f-string -->
+      <button onclick="(function(){{ 
         const preset = {{
           hv_min:{hv_min}, hv_max:{hv_max}, adx_exit:{adx_exit}, vwap_accept_k:{vwap_accept_k},
           use_trend_bias:{str(use_trend_bias).lower()}, trend_bias_strength:{trend_bias_strength},
-          trend_method:"{trend_method}", wing_ext_pct:{wing_ext_pct},
+          trend_method:'{trend_method}', wing_ext_pct:{wing_ext_pct},
           days_before:{days_before}, days_after:{days_after}
         }};
         localStorage.setItem('icb_preset', JSON.stringify(preset));
         alert('Preset saved');
-      }})()" style="background:#152846;border:1px solid #2f4d74;color:#cde1ff;border-radius:8px;padding:8px 12px;">Save Preset</button>
+      }})()" 
+      style="background:#152846;border:1px solid #2f4d74;color:#cde1ff;border-radius:8px;padding:8px 12px;">
+        Save Preset
+      </button>
 
-      <button onclick="(function(){{
+      <button onclick="(function(){{ 
         const raw = localStorage.getItem('icb_preset');
         if(!raw) return alert('No preset found');
         const p = JSON.parse(raw);
-        alert('Preset loaded (values shown in alert). Apply them in sidebar if needed.\\n' + JSON.stringify(p, null, 2));
-      }})()" style="background:#0b1221;border:1px solid #35507a;color:#cde1ff;border-radius:8px;padding:8px 12px;">Load Preset</button>
+        alert('Preset loaded (values shown in alert). Apply them in Settings if needed.\\n' + JSON.stringify(p, null, 2));
+      }})()" 
+      style="background:#0b1221;border:1px solid #35507a;color:#cde1ff;border-radius:8px;padding:8px 12px;">
+        Load Preset
+      </button>
     </div>
     """, height=60)
 
 # =========================================================
-# Sticky bottom bar (visual summary & CTA)
+# Sticky bottom bar (visual summary & CTA) — braces FIXED
 # =========================================================
 st.markdown(f"""
 <div class="sticky-bar">
@@ -184,8 +190,8 @@ st.markdown(f"""
       <span class="pill">Blackout: {days_before}d before / {days_after}d after</span>
     </div>
     <div>
-      <!-- Visual button (scrolls to top); real Run button is in Results tab -->
-      <button class="cta" onclick="window.scrollTo({top:0,behavior:'smooth'})">Run Backtest ↑</button>
+      <!-- Double braces to escape JS object literal -->
+      <button class="cta" onclick="window.scrollTo({{top:0,behavior:'smooth'}})">Run Backtest ↑</button>
     </div>
   </div>
 </div>
