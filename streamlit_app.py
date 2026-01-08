@@ -42,16 +42,6 @@ section[data-testid="stSidebar"] { background-color: var(--panel); }
 .header .title { font-size: 22px; font-weight: 700; }
 .header .sub { opacity: .9; }
 
-/* Top nav (single page anchors) */
-.nav {
-  display:flex; gap:16px; margin-top:8px;
-}
-.nav a {
-  color:#cde1ff; text-decoration:none; font-weight:600; font-size:14px;
-  padding-bottom:4px; border-bottom:2px solid transparent;
-}
-.nav a:hover { border-bottom-color:#cde1ff; }
-
 /* Card container */
 .card {
   background: var(--panel);
@@ -78,39 +68,28 @@ section[data-testid="stSidebar"] { background-color: var(--panel); }
   border: none;
 }
 
-/* Sticky bottom action bar (visual CTA) */
-.sticky-bar{
-  position:sticky; bottom:0; background:rgba(12,18,32,.85);
-  backdrop-filter:blur(6px); border-top:1px solid var(--border);
-  padding:12px 0; z-index:999;
+/* Compact KPI cards */
+.kpi {
+  background:#0b1221;
+  border:1px solid #2b3e59;
+  border-radius:10px;
+  padding:10px 12px;
 }
-.sticky-inner{
-  max-width:1100px; margin:0 auto; display:flex;
-  justify-content:space-between; align-items:center; gap:12px; color:#cde1ff;
-}
-.pill { background:#14223a; border:1px solid #2b3e59; border-radius:999px; padding:6px 10px; font-size:13px }
-.cta {
-  background:linear-gradient(90deg,var(--primary),var(--primary2));
-  border:none; border-radius:10px; color:#091426; font-weight:800; padding:10px 16px; cursor:pointer;
-}
+.kpi .label { font-size:12px; color:#9ca3af; margin-bottom:4px; }
+.kpi .value { font-size:18px; font-weight:700; color:#cde1ff; }
+.kpi .delta { font-size:12px; color:#9ca3af; }
 
 /* Section anchors spacing */
 .section { scroll-margin-top: 90px; } /* avoid header overlap */
 </style>
 """, unsafe_allow_html=True)
 
-# Header + top nav
+# Header (no tabs, single page)
 st.markdown("""
 <div class="header">
   <div>
     <div class="title">Iron Condor Backtester</div>
     <div class="sub">Options analytics & strategy management</div>
-    <div class="nav">
-      <a href="#overview">Overview</a>
-      <a href="#uploads">Uploads</a>
-      <a href="#settings">Settings</a>
-      <a href="#results">Results</a>
-    </div>
   </div>
   <div style="display:flex;gap:8px">
     <span>v1.0</span>
@@ -289,7 +268,7 @@ def run_backtest(
     for i in range(len(idx)):
         d = idx[i]
 
-        # Early exits on open positions
+        # Early exits
         if open_positions:
             still_open = []
             for pos in open_positions:
@@ -299,7 +278,7 @@ def run_backtest(
                 broke  = (current_close < pos["lp"]) or (current_close > pos["lc"])
                 adx_exit_now = (df.loc[d, "adx"] >= ADX_EXIT)
 
-                # vwap exit (slope flip + far enough + on slope side)
+                # VWAP exit
                 vwap_today = df.loc[d, "vwap"]
                 vwap_prev  = df.iloc[i-1]["vwap"] if i > 0 else vwap_today
                 delta_today = vwap_today - vwap_prev
@@ -439,137 +418,91 @@ def run_backtest(
     return df, trades_df, equity_df, summary
 
 # =========================================================
-# OVERVIEW (single page)
+# TOP: Uploads + Settings + Run button (ONE CARD)
 # =========================================================
-st.markdown('<div id="overview" class="section"></div>', unsafe_allow_html=True)
-st.subheader("Overview")
-st.markdown("""
-<div class="card">
-  <div style="font-size:16px;font-weight:700;margin-bottom:6px;">Welcome</div>
-  <div style="color:#c9d4e3;">
-    Use <b>Uploads</b> and <b>Settings</b> to configure your backtest, then press <b>Run Backtest</b>.
-    Results appear below under <b>Summary</b>, <b>Drawdown</b>, <b>Loss</b>, <b>Trades</b>, and charts.
-  </div>
-</div>
-""", unsafe_allow_html=True)
-
-# =========================================================
-# UPLOADS
-# =========================================================
-st.markdown('<div id="uploads" class="section"></div>', unsafe_allow_html=True)
-st.subheader("Uploads")
-st.markdown('<div class="card">', unsafe_allow_html=True)
-
-st.markdown('<div class="upload-box"><div class="upload-head">Upload CSV</div><div class="upload-help">Drag/drop or browse • Limit 200MB • CSV • Expected columns: timestamp, close, high, low, vwap</div></div>', unsafe_allow_html=True)
-uploaded_csv = st.file_uploader("Upload CSV", type=["csv"], label_visibility="collapsed")
-if uploaded_csv is not None:
-    st.session_state["uploaded_csv"] = uploaded_csv
-
-st.markdown('<div class="upload-box"><div class="upload-head">Upload Blackout Dates (.txt)</div><div class="upload-help">One date per line (YYYY-MM-DD). Lines starting with # are ignored.</div></div>', unsafe_allow_html=True)
-uploaded_txt = st.file_uploader("Upload Blackout Dates (.txt)", type=["txt"], label_visibility="collapsed")
-if uploaded_txt is not None:
-    st.session_state["uploaded_txt"] = uploaded_txt
-
-st.markdown('</div>', unsafe_allow_html=True)
-
-# =========================================================
-# SETTINGS
-# =========================================================
-st.markdown('<div id="settings" class="section"></div>', unsafe_allow_html=True)
-st.subheader("Settings")
-
+st.subheader("Setup")
 with st.container():
-    c1, c2, c3 = st.columns(3)
-    with c1:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    col_left, col_right = st.columns([1, 1])
+
+    with col_left:
+        st.markdown('<div class="upload-box"><div class="upload-head">Upload CSV</div><div class="upload-help">Drag/drop or browse • Limit 200MB • CSV • Expected columns: timestamp, close, high, low, vwap</div></div>', unsafe_allow_html=True)
+        uploaded_csv = st.file_uploader("Upload CSV", type=["csv"], label_visibility="collapsed")
+        if uploaded_csv is not None:
+            st.session_state["uploaded_csv"] = uploaded_csv
+
+        st.markdown('<div class="upload-box"><div class="upload-head">Upload Blackout Dates (.txt)</div><div class="upload-help">One date per line (YYYY-MM-DD). Lines starting with # are ignored.</div></div>', unsafe_allow_html=True)
+        uploaded_txt = st.file_uploader("Upload Blackout Dates (.txt)", type=["txt"], label_visibility="collapsed")
+        if uploaded_txt is not None:
+            st.session_state["uploaded_txt"] = uploaded_txt
+
+    with col_right:
         hv_min = st.number_input("HV Min (%)", value=35.0)
-        adx_exit = st.number_input("ADX Exit ≥", value=25)
-        use_trend_bias = st.checkbox("Use Trend Bias")
-    with c2:
         hv_max = st.number_input("HV Max (%)", value=75.0)
+        adx_exit = st.number_input("ADX Exit ≥", value=25)
         vwap_accept_k = st.number_input("VWAP Accept k×(BBU−BBM)", value=0.5)
+        use_trend_bias = st.checkbox("Use Trend Bias")
         trend_bias_strength = st.number_input("Bias Strength", value=2.0, disabled=not use_trend_bias)
-    with c3:
         trend_method = st.selectbox("Trend Method", ["VWAP Slope", "VWAP vs SMA20", "ADX + DI"])
         wing_ext_pct = st.number_input("Wing Extension %", value=25.0)
         days_before = st.number_input("Days before blackout", value=5)
         days_after = st.number_input("Days after blackout", value=5)
 
-    # Presets (client-side localStorage only)
-    html(f"""
-    <div style="display:flex;gap:10px;margin:8px 0;">
-      <button onclick="(function(){{
-        const preset = {{
-          hv_min:{hv_min}, hv_max:{hv_max}, adx_exit:{adx_exit}, vwap_accept_k:{vwap_accept_k},
-          use_trend_bias:{str(use_trend_bias).lower()}, trend_bias_strength:{trend_bias_strength},
-          trend_method:'{trend_method}', wing_ext_pct:{wing_ext_pct},
-          days_before:{days_before}, days_after:{days_after}
-        }};
-        localStorage.setItem('icb_preset', JSON.stringify(preset));
-        alert('Preset saved');
-      }})()"
-      style="background:#152846;border:1px solid #2f4d74;color:#cde1ff;border-radius:8px;padding:8px 12px;">
-        Save Preset
-      </button>
+        # Presets (client-side localStorage)
+        html(f"""
+        <div style="display:flex;gap:10px;margin:8px 0;">
+          <button onclick="(function(){{
+            const preset = {{
+              hv_min:{hv_min}, hv_max:{hv_max}, adx_exit:{adx_exit}, vwap_accept_k:{vwap_accept_k},
+              use_trend_bias:{str(use_trend_bias).lower()}, trend_bias_strength:{trend_bias_strength},
+              trend_method:'{trend_method}', wing_ext_pct:{wing_ext_pct},
+              days_before:{days_before}, days_after:{days_after}
+            }};
+            localStorage.setItem('icb_preset', JSON.stringify(preset));
+            alert('Preset saved');
+          }})()"
+          style="background:#152846;border:1px solid #2f4d74;color:#cde1ff;border-radius:8px;padding:8px 12px;">
+            Save Preset
+          </button>
 
-      <button onclick="(function(){{
-        const raw = localStorage.getItem('icb_preset');
-        if(!raw) return alert('No preset found');
-        const p = JSON.parse(raw);
-        alert('Preset loaded (values shown in alert). Apply them in Settings if needed.\\n' + JSON.stringify(p, null, 2));
-      }})()"
-      style="background:#0b1221;border:1px solid #35507a;color:#cde1ff;border-radius:8px;padding:8px 12px;">
-        Load Preset
-      </button>
-    </div>
-    """, height=60)
+          <button onclick="(function(){{
+            const raw = localStorage.getItem('icb_preset');
+            if(!raw) return alert('No preset found');
+            const p = JSON.parse(raw);
+            alert('Preset loaded (values shown in alert). Apply them in Settings if needed.\\n' + JSON.stringify(p, null, 2));
+          }})()"
+          style="background:#0b1221;border:1px solid #35507a;color:#cde1ff;border-radius:8px;padding:8px 12px;">
+            Load Preset
+          </button>
+        </div>
+        """, height=60)
 
-# =========================================================
-# Sticky bottom bar (visual summary & CTA)
-# =========================================================
-st.markdown(f"""
-<div class="sticky-bar">
-  <div class="sticky-inner">
-    <div style="display:flex;gap:10px;flex-wrap:wrap;">
-      <span class="pill">HV: {hv_min}–{hv_max}%</span>
-      <span class="pill">ADX Exit ≥ {adx_exit}</span>
-      <span class="pill">VWAP κ {vwap_accept_k}</span>
-      <span class="pill">Trend: {trend_method}</span>
-      <span class="pill">Bias: {'On' if use_trend_bias else 'Off'} ({trend_bias_strength if use_trend_bias else '—'})</span>
-      <span class="pill">Wing Ext: {wing_ext_pct}%</span>
-      <span class="pill">Blackout: {days_before}d before / {days_after}d after</span>
-    </div>
-    <div>
-      <button class="cta" onclick="window.scrollTo({top:0,behavior:'smooth'})">Run Backtest ↑</button>
-    </div>
-  </div>
-</div>
-""", unsafe_allow_html=True)
+    # Run button (top, within same card)
+    run_clicked = st.button("Run Backtest")
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # =========================================================
-# RESULTS (Run & display)
+# OUTPUTS (compact box ABOVE charts)
 # =========================================================
-st.markdown('<div id="results" class="section"></div>', unsafe_allow_html=True)
-st.subheader("Results")
-
-run_clicked = st.button("Run Backtest")
+# These are populated after run; before run we show a hint
+if not run_clicked:
+    st.info("Upload files, set your parameters above, then press **Run Backtest**.")
 
 if run_clicked:
     csv_file = st.session_state.get("uploaded_csv")
     txt_file = st.session_state.get("uploaded_txt")
 
     if not csv_file or not txt_file:
-        st.error("Please upload both CSV and blackout dates (.txt) in the Uploads section.")
+        st.error("Please upload both CSV and blackout dates (.txt) at the top.")
         st.stop()
 
     # Read CSV defensively
     df_raw = pd.read_csv(csv_file)
     df_raw.columns = [c.lower() for c in df_raw.columns]
 
-    # Full backtest requires these:
     required_full = {"timestamp", "close", "high", "low", "vwap"}
     missing_full = required_full - set(df_raw.columns)
 
-    # Parse blackout dates
     blackout_dates = parse_blackout_txt(txt_file)
 
     # Fallback if missing columns
@@ -583,7 +516,15 @@ if run_clicked:
             st.error("CSV must include at least 'close' and 'timestamp' to render the fallback chart.")
             st.stop()
 
-        # Bollinger on CLOSE
+        # ---- Outputs box (placeholders) ----
+        st.subheader("Outputs")
+        o1, o2, o3, o4 = st.columns(4)
+        with o1: st.markdown('<div class="kpi"><div class="label">Trades</div><div class="value">—</div></div>', unsafe_allow_html=True)
+        with o2: st.markdown('<div class="kpi"><div class="label">Win Rate</div><div class="value">—</div></div>', unsafe_allow_html=True)
+        with o3: st.markdown('<div class="kpi"><div class="label">Total P&L</div><div class="value">$—</div></div>', unsafe_allow_html=True)
+        with o4: st.markdown('<div class="kpi"><div class="label">Max Drawdown</div><div class="value">$—</div><div class="delta">—%</div></div>', unsafe_allow_html=True)
+
+        # ---- Chart (fallback) ----
         ma = df["close"].rolling(20).mean()
         ub = ma + 2 * df["close"].rolling(20).std()
         lb = ma - 2 * df["close"].rolling(20).std()
@@ -597,11 +538,10 @@ if run_clicked:
                                     mode="lines", line=dict(color="orange", width=1.2)))
         fig_px.add_trace(go.Scatter(x=df.index, y=lb, name="BB Lower (20,2σ)",
                                     mode="lines", line=dict(color="orange", width=1.2)))
-        # blackout shading
         if blackout_dates and len(df) > 0:
             for e in blackout_dates:
                 start = e - timedelta(days=int(days_before))
-                end = e + timedelta(days=int(days_after))
+                end   = e + timedelta(days=int(days_after))
                 fig_px.add_vrect(x0=start, x1=end, fillcolor="red", opacity=0.08, line_width=0)
 
         fig_px.update_layout(
@@ -612,18 +552,9 @@ if run_clicked:
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
         )
         st.plotly_chart(fig_px, use_container_width=True)
-
-        # Placeholder metrics
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Trades", "—")
-        m2.metric("Win Rate", "—")
-        m3.metric("Total P&L", "$—")
-        m4.metric("Max Drawdown", "$—", "—%")
-
-        st.write("✅ Backtest (fallback) complete. Add required columns for full logic.")
         st.stop()
 
-    # Full run
+    # ---- Full run ----
     with st.spinner("Running backtest…"):
         df_out, trades_df, equity_df, summary = run_backtest(
             df_raw=df_raw,
@@ -635,89 +566,76 @@ if run_clicked:
             days_before=days_before, days_after=days_after
         )
 
-    # -----------------------------
-    # Summary metric cards
-    # -----------------------------
-    st.subheader("Summary")
-    m1, m2, m3, m4, m5 = st.columns(5, gap="small")
-    m1.metric("Trades", f"{summary['trades']}")
-    m2.metric("Win Rate", f"{summary['win_rate']:.2f}%")
-    m3.metric("Total P&L", f"${summary['total_pnl']:.2f}")
-    m4.metric("Max Drawdown", f"${summary['max_drawdown']:.2f}", f"{summary['max_drawdown_pct']:.2f}%")
-    m5.metric("Exits (Bre/ADX/VWAP/Broke)", f"{summary['breaches']}/{summary['adx_exits']}/{summary['vwap_exits']}/{summary['brokes']}")
+    # =====================================================
+    # OUTPUTS BOX (compact, above charts)
+    # =====================================================
+    st.subheader("Outputs")
 
-    # -----------------------------
-    # Drawdown (SEPARATE SECTION)
-    # -----------------------------
-    st.subheader("Drawdown")
-    if equity_df.empty or len(equity_df) < 2:
-        st.info("No equity curve to compute drawdown.")
-    else:
+    # Row 1: Summary
+    r1c1, r1c2, r1c3, r1c4, r1c5 = st.columns(5)
+    r1c1.markdown(f'<div class="kpi"><div class="label">Trades</div><div class="value">{summary["trades"]}</div></div>', unsafe_allow_html=True)
+    r1c2.markdown(f'<div class="kpi"><div class="label">Win Rate</div><div class="value">{summary["win_rate"]:.2f}%</div></div>', unsafe_allow_html=True)
+    r1c3.markdown(f'<div class="kpi"><div class="label">Total P&L</div><div class="value">${summary["total_pnl"]:.2f}</div></div>', unsafe_allow_html=True)
+    r1c4.markdown(f'<div class="kpi"><div class="label">Max Drawdown</div><div class="value">${summary["max_drawdown"]:.2f}</div><div class="delta">{summary["max_drawdown_pct"]:.2f}%</div></div>', unsafe_allow_html=True)
+    r1c5.markdown(f'<div class="kpi"><div class="label">Exits (Bre/ADX/VWAP/Broke)</div><div class="value">{summary["breaches"]}/{summary["adx_exits"]}/{summary["vwap_exits"]}/{summary["brokes"]}</div></div>', unsafe_allow_html=True)
+
+    # Compute drawdown series for KPIs
+    dd_current_val = 0.0
+    dd_current_pct = 0.0
+    peak_equity = 0.0
+    if not equity_df.empty and len(equity_df) > 1:
         equity_df = equity_df.sort_index()
         running_peak = equity_df["cash"].cummax()
-        dd_curve = equity_df["cash"] - running_peak                 # ≤ 0
+        dd_curve = equity_df["cash"] - running_peak
         dd_pct_curve = (dd_curve / running_peak.replace(0, np.nan)).fillna(0.0) * 100.0
+        dd_current_val = float(dd_curve.iloc[-1])
+        dd_current_pct = float(dd_pct_curve.iloc[-1])
+        peak_equity = float(running_peak.max())
 
-        current_dd = float(dd_curve.iloc[-1])
-        current_dd_pct = float(dd_pct_curve.iloc[-1])
-        max_dd_val = float(dd_curve.min())                          # most negative
-        max_dd_pct = float(dd_pct_curve.min())
+    # Row 2: Drawdown KPIs
+    r2c1, r2c2, r2c3 = st.columns(3)
+    r2c1.markdown(f'<div class="kpi"><div class="label">Current Drawdown</div><div class="value">${abs(dd_current_val):,.2f}</div><div class="delta">{abs(dd_current_pct):.2f}%</div></div>', unsafe_allow_html=True)
+    r2c2.markdown(f'<div class="kpi"><div class="label">Max Drawdown</div><div class="value">${summary["max_drawdown"]:,.2f}</div><div class="delta">{summary["max_drawdown_pct"]:.2f}%</div></div>', unsafe_allow_html=True)
+    r2c3.markdown(f'<div class="kpi"><div class="label">Peak Equity</div><div class="value">${peak_equity:,.2f}</div></div>', unsafe_allow_html=True)
 
-        dd1, dd2, dd3 = st.columns(3)
-        dd1.metric("Max Drawdown", f"${abs(max_dd_val):,.2f}", f"{abs(max_dd_pct):.2f}%")
-        dd2.metric("Current Drawdown", f"${abs(current_dd):,.2f}", f"{abs(current_dd_pct):.2f}%")
-        dd3.metric("Peak Equity", f"${running_peak.max():,.2f}")
+    # Row 3: Loss KPIs
+    df_losses = trades_df[trades_df["pnl"] < 0].copy()
+    total_loss = float(-df_losses["pnl"].sum()) if not df_losses.empty else 0.0
+    num_losses = int(len(df_losses))
+    avg_loss = float((-df_losses["pnl"].mean()) if num_losses else 0.0)
+    worst_loss = float((-df_losses["pnl"].min()) if num_losses else 0.0)
 
-        fig_dd = go.Figure()
-        fig_dd.add_trace(go.Scatter(
-            x=equity_df.index, y=equity_df["cash"], name="Equity",
-            mode="lines", line=dict(color="#22D3EE", width=2.5)
-        ))
-        fig_dd.add_trace(go.Scatter(
-            x=equity_df.index, y=dd_curve, name="Drawdown",
-            mode="lines", line=dict(color="#F87171", width=2),
-            fill="tozeroy"
-        ))
-        fig_dd.update_layout(
-            template="plotly_dark",
-            margin=dict(l=10, r=10, t=40, b=10),
-            xaxis_title="", yaxis_title="USD",
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
-        )
-        st.plotly_chart(fig_dd, use_container_width=True)
+    r3c1, r3c2, r3c3, r3c4 = st.columns(4)
+    r3c1.markdown(f'<div class="kpi"><div class="label">Total Loss</div><div class="value">${total_loss:,.2f}</div></div>', unsafe_allow_html=True)
+    r3c2.markdown(f'<div class="kpi"><div class="label"># Losing Trades</div><div class="value">{num_losses}</div></div>', unsafe_allow_html=True)
+    r3c3.markdown(f'<div class="kpi"><div class="label">Avg Loss</div><div class="value">${avg_loss:,.2f}</div></div>', unsafe_allow_html=True)
+    r3c4.markdown(f'<div class="kpi"><div class="label">Worst Loss</div><div class="value">${worst_loss:,.2f}</div></div>', unsafe_allow_html=True)
 
-    # -----------------------------
-    # Loss (SEPARATE SECTION)
-    # -----------------------------
-    st.subheader("Loss")
-    if trades_df.empty:
-        st.info("No trades to compute loss metrics.")
-    else:
-        df_losses = trades_df[trades_df["pnl"] < 0].copy()
-        total_loss = float(-df_losses["pnl"].sum()) if not df_losses.empty else 0.0
-        num_losses = int(len(df_losses))
-        avg_loss = float((-df_losses["pnl"].mean()) if num_losses else 0.0)
-        worst_loss = float((-df_losses["pnl"].min()) if num_losses else 0.0)
+    # =====================================================
+    # CHARTS (immediately below outputs)
+    # =====================================================
+    st.subheader("Charts")
 
-        ls1, ls2, ls3, ls4 = st.columns(4)
-        ls1.metric("Total Loss", f"${total_loss:,.2f}")
-        ls2.metric("# Losing Trades", f"{num_losses}")
-        ls3.metric("Avg Loss", f"${avg_loss:,.2f}")
-        ls4.metric("Worst Loss", f"${worst_loss:,.2f}")
-
-        st.markdown("#### Loss Trades")
-        if df_losses.empty:
-            st.info("No losing trades under current settings.")
+    # Equity + Drawdown chart (side-by-side)
+    c_eq, c_hist = st.columns([2, 1])
+    # Equity curve
+    with c_eq:
+        if equity_df.empty:
+            st.info("No equity curve to display.")
         else:
-            df_losses["entry_date"] = pd.to_datetime(df_losses["entry_date"])
-            df_losses["expiry_date"] = pd.to_datetime(df_losses["expiry_date"])
-            st.dataframe(
-                df_losses.sort_values("entry_date"),
-                use_container_width=True, hide_index=True, height=320
-            )
+            fig_eq = go.Figure()
+            fig_eq.add_trace(go.Scatter(x=equity_df.index, y=equity_df["cash"],
+                                        name="Equity", mode="lines", line=dict(color="#22D3EE", width=3)))
+            fig_eq.update_layout(template="plotly_dark", margin=dict(l=10, r=10, t=40, b=10),
+                                xaxis_title="", yaxis_title="Cash ($)")
+            st.plotly_chart(fig_eq, use_container_width=True)
 
-            # Optional: loss distribution (histogram)
-            hist_counts, hist_bins = np.histogram(-df_losses["pnl"].values, bins=min(20, max(5, num_losses)))
+    # Loss distribution histogram
+    with c_hist:
+        if df_losses.empty:
+            st.info("No losses to chart.")
+        else:
+            hist_counts, hist_bins = np.histogram(-df_losses["pnl"].values, bins=min(20, max(5, len(df_losses))))
             fig_hist = go.Figure()
             fig_hist.add_trace(go.Bar(
                 x=[f"{round(hist_bins[i],2)}–{round(hist_bins[i+1],2)}" for i in range(len(hist_bins)-1)],
@@ -732,36 +650,8 @@ if run_clicked:
             )
             st.plotly_chart(fig_hist, use_container_width=True)
 
-    # -----------------------------
-    # Trades table (full)
-    # -----------------------------
-    st.subheader("Trades")
-    if trades_df.empty:
-        st.info("No trades generated under current settings.")
-    else:
-        show_df = trades_df.copy()
-        show_df["entry_date"] = pd.to_datetime(show_df["entry_date"])
-        show_df["expiry_date"] = pd.to_datetime(show_df["expiry_date"])
-        st.dataframe(show_df, use_container_width=True, hide_index=True)
-
-    # -----------------------------
-    # Equity curve chart (full curve)
-    # -----------------------------
-    st.subheader("Equity Curve")
-    if equity_df.empty:
-        st.info("No equity curve to display.")
-    else:
-        fig_eq = go.Figure()
-        fig_eq.add_trace(go.Scatter(x=equity_df.index, y=equity_df["cash"],
-                                    name="Equity", mode="lines", line=dict(color="#22D3EE", width=3)))
-        fig_eq.update_layout(template="plotly_dark", margin=dict(l=10, r=10, t=40, b=10),
-                             xaxis_title="", yaxis_title="Cash ($)")
-        st.plotly_chart(fig_eq, use_container_width=True)
-
-    # -----------------------------
-    # VWAP + Bollinger Bands + trade markers
-    # -----------------------------
-    st.subheader("VWAP & Bollinger Bands with Trade Markers")
+    # VWAP + Bollinger Bands + trade markers (full-width)
+    st.markdown("#### VWAP & Bollinger Bands with Trade Markers")
     fig_px = go.Figure()
     fig_px.add_trace(go.Scatter(x=df_out.index, y=df_out["vwap"], name="VWAP",
                                 mode="lines", line=dict(color="steelblue", width=2)))
@@ -836,5 +726,26 @@ if run_clicked:
     )
     st.plotly_chart(fig_px, use_container_width=True)
 
+    # =====================================================
+    # TABLES (below charts, still same page)
+    # =====================================================
+    st.subheader("Trades")
+    if trades_df.empty:
+        st.info("No trades generated under current settings.")
+    else:
+        show_df = trades_df.copy()
+        show_df["entry_date"] = pd.to_datetime(show_df["entry_date"])
+        show_df["expiry_date"] = pd.to_datetime(show_df["expiry_date"])
+        st.dataframe(show_df, use_container_width=True, hide_index=True)
+
 else:
-    st.info("Configure uploads & settings, then press **Run Backtest** to generate results.")
+    # Just a small Overview card on first load (no sticky bars)
+    st.markdown("""
+    <div class="card">
+      <div style="font-size:16px;font-weight:700;margin-bottom:6px;">Overview</div>
+      <div style="color:#c9d4e3;">
+        Keep your <b>Uploads</b> and <b>Settings</b> at the top. Click <b>Run Backtest</b> to populate the
+        <b>Outputs</b> box and charts below. No tabs; everything stays on one page.
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
