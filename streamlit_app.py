@@ -8,36 +8,34 @@ import plotly.graph_objects as go
 from datetime import timedelta
 from typing import List
 
-# -------------------------------- FAST BOOT: page + CSS only -------------------------------
+# ------------------------------------------------------------------------------------------
+# FAST BOOT
+# ------------------------------------------------------------------------------------------
 st.set_page_config(page_title="Iron Condor Backtester", page_icon="📈", layout="wide")
 
-# Simple header (kept)
-st.markdown("""
-# Iron Condor Backtester
-Options analytics & strategy management  
-v1.0
-""", unsafe_allow_html=True)
-
 # === REMOVED: Easy Tab and tab layout ===
-# (All UI is now single-page — no st.tabs)
+# (Everything is now on a single page)
 
-# =========================================
-#            FILE UPLOADS (first)
-# =========================================
+# Minimal header
+st.markdown("## 📈 Iron Condor Backtester")
+
+# ------------------------------------------------------------------------------------------
 # === UPDATED: Single-page layout ===
-st.markdown("### Uploads")
-st.markdown("Upload the data CSV and blackout dates file to begin.")
-
-uploaded_csv = st.file_uploader("Upload CSV", type=["csv"])
-st.caption("CSV must include columns: timestamp, close, high, low, vwap")
-
-uploaded_txt = st.file_uploader("Upload Blackout Dates (.txt)", type=["txt"])
-st.caption("One date per line (YYYY-MM-DD). Lines starting with # are ignored.")
+# 1) Data Files (must be first)
+# ------------------------------------------------------------------------------------------
+with st.container():
+    st.subheader("Data Files")
+    st.write("Upload the input CSV and blackout dates file to begin.")
+    uploaded_csv = st.file_uploader("CSV File (OHLCV + VWAP)", type=["csv"])
+    uploaded_txt = st.file_uploader("Blackout Dates (TXT)", type=["txt"])
+    st.caption("TXT: one date per line (YYYY-MM-DD). Lines beginning with '#' are ignored.")
 
 has_csv = uploaded_csv is not None
 has_txt = uploaded_txt is not None
 
-# -------------------------------- LIGHT HELPERS (cached) -----------------------------------
+# ------------------------------------------------------------------------------------------
+# Helpers (cached) — unchanged logic
+# ------------------------------------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def parse_blackout_txt(file) -> List[pd.Timestamp]:
     if not file:
@@ -122,7 +120,6 @@ def compute_trend_flags(df: pd.DataFrame, method: str) -> pd.DataFrame:
         df["trend_up"] = False; df["trend_down"] = False
     return df
 
-# -------------------------------- FULL BACKTEST (cached) -----------------------------------
 @st.cache_data(show_spinner=True)
 def run_backtest(
     df_raw: pd.DataFrame,
@@ -291,15 +288,15 @@ def run_backtest(
     equity_df = pd.DataFrame(eq).set_index("date") if eq else pd.DataFrame(columns=["cash"])
 
     # summary
-    wins     = (trades_df["outcome"]=="win").sum()     if not trades_df.empty else 0
-    losses   = (trades_df["outcome"]=="loss").sum()    if not trades_df.empty else 0
-    breaches = (trades_df["outcome"]=="breach").sum()  if not trades_df.empty else 0
-    adx_exits= (trades_df["outcome"]=="adx_exit").sum()if not trades_df.empty else 0
-    vwap_exits=(trades_df["outcome"]=="vwap_exit").sum()if not trades_df.empty else 0
-    brokes   = (trades_df["outcome"]=="broke").sum()   if not trades_df.empty else 0
+    wins      = (trades_df["outcome"]=="win").sum()      if not trades_df.empty else 0
+    losses    = (trades_df["outcome"]=="loss").sum()     if not trades_df.empty else 0
+    breaches  = (trades_df["outcome"]=="breach").sum()   if not trades_df.empty else 0
+    adx_exits = (trades_df["outcome"]=="adx_exit").sum() if not trades_df.empty else 0
+    vwap_exits= (trades_df["outcome"]=="vwap_exit").sum()if not trades_df.empty else 0
+    brokes    = (trades_df["outcome"]=="broke").sum()    if not trades_df.empty else 0
 
-    win_rate = (100*wins/len(trades_df)) if not trades_df.empty else 0.0
-    total_pnl = float(trades_df["pnl"].sum()) if not trades_df.empty else 0.0
+    win_rate   = (100*wins/len(trades_df)) if not trades_df.empty else 0.0
+    total_pnl  = float(trades_df["pnl"].sum()) if not trades_df.empty else 0.0
 
     # max drawdown
     if not equity_df.empty and not equity_df["cash"].empty:
@@ -324,38 +321,43 @@ def run_backtest(
     }
     return df, trades_df, equity_df, summary
 
-# =========================================
-#      SETTINGS (shown after CSV upload)
-# =========================================
+# ------------------------------------------------------------------------------------------
+# 2) Configuration (only shown after CSV upload)
+# ------------------------------------------------------------------------------------------
 if has_csv:
-    st.markdown("### Settings")
-    # Only present when CSV is uploaded; clear labels; keep defaults identical
-    hv_min = st.number_input("HV Min (%)", value=35.0)
-    hv_max = st.number_input("HV Max (%)", value=75.0)
-    adx_exit = st.number_input("ADX Exit ≥", value=25)
-    vwap_accept_k = st.number_input("VWAP Accept k×(BBU−BBM)", value=0.5)
+    with st.container():
+        st.subheader("Configuration")
+        left, right = st.columns(2)
 
-    use_trend_bias = st.checkbox("Use Trend Bias")
-    trend_bias_strength = st.number_input("Bias Strength", value=2.0, disabled=not use_trend_bias)
-    trend_method = st.selectbox("Trend Method", ["VWAP Slope","VWAP vs SMA20","ADX + DI"])
+        # Left: Backtest Parameters (labels aligned with your screenshot; values preserved)
+        with left:
+            st.markdown("**Backtest Parameters**")
+            days_before = st.number_input("Days Before Earnings", value=7)     # same variable used for blackout window
+            days_after  = st.number_input("Days After Earnings",  value=1)
+            adx_exit    = st.number_input("ADX Exit Threshold",   value=30)
+            vwap_accept_k = st.number_input("VWAP Exit Distance (k)", value=1.0)
+            hv_min      = st.number_input("Min Historical Vol (%)", value=15.0)
+            hv_max      = st.number_input("Max Historical Vol (%)", value=40.0)
 
-    wing_ext_pct = st.number_input("Wing Extension %", value=25.0)
-    days_before = st.number_input("Days before blackout", value=5)
-    days_after  = st.number_input("Days after blackout", value=5)
+        # Right: Trend Bias Settings
+        with right:
+            st.markdown("**Trend Bias Settings**")
+            use_trend_bias = st.checkbox("Enable Trend Bias")
+            trend_method = st.selectbox("Trend Detection Method", ["VWAP Slope","VWAP vs SMA20","ADX + DI"])
+            trend_bias_strength = st.number_input("Bias Strength ($)", value=2.0, disabled=not use_trend_bias)
+            wing_ext_pct = st.number_input("Wing Extension (%)", value=20.0)
 
-    # === UPDATED: Single-page layout ===
-    # Run Backtest button shown after settings; disabled until both files are uploaded
+    # Run Backtest (disabled until both files present)
     run_disabled = not (has_csv and has_txt)
     run_clicked = st.button("Run Backtest", disabled=run_disabled)
     if run_disabled:
         st.caption("Upload both files (CSV and blackout .txt) to enable the backtest.")
-
 else:
-    st.info("Upload a CSV to reveal strategy settings and the backtest button.")
+    st.info("Upload a CSV to reveal configuration and the backtest button.")
 
-# =========================================
-#          RESULTS (on button click)
-# =========================================
+# ------------------------------------------------------------------------------------------
+# 3) Summary + Charts (after run)
+# ------------------------------------------------------------------------------------------
 if has_csv and 'run_clicked' in locals() and run_clicked:
     if not uploaded_txt:
         st.error("Upload blackout .txt to proceed.")
@@ -366,17 +368,19 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
     missing = required - set(df_raw.columns)
     blackout_dates = parse_blackout_txt(uploaded_txt)
 
+    # Fallback chart if CSV lacks required columns for full logic
     if missing:
-        st.warning(f"CSV missing required columns for full logic: {sorted(missing)}")
-        st.info("Showing basic close+BB chart as a fallback.")
-
-        # fallback chart (unchanged logic)
+        st.markdown("### Summary")
+        st.info("No results yet. CSV is missing required columns. Showing basic price chart.")
         df_raw["timestamp"] = pd.to_datetime(df_raw.get("timestamp"), errors="coerce")
         df = df_raw.dropna(subset=["timestamp"]).sort_values("timestamp").set_index("timestamp")
+
         ma = df["close"].rolling(20).mean()
         ub = ma + 2 * df["close"].rolling(20).std()
         lb = ma - 2 * df["close"].rolling(20).std()
 
+        st.markdown("### Equity Curve")
+        st.info("No equity curve.")
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df.index,y=df["close"],name="Close",mode="lines",line=dict(color="#60A5FA",width=2.5)))
         fig.add_trace(go.Scatter(x=df.index,y=ma,name="BB Mid (20)",mode="lines",line=dict(color="gray",width=1.2)))
@@ -392,9 +396,11 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
         fig.update_layout(template="plotly_dark",margin=dict(l=10,r=10,t=40,b=10),
                           xaxis_title="",yaxis_title="Price ($)",
                           legend=dict(orientation="h",y=1.02))
+        st.markdown("### Price Chart with Indicators")
         st.plotly_chart(fig, use_container_width=True)
         st.stop()
 
+    # Full backtest
     with st.spinner("Running backtest…"):
         df_out, trades_df, equity_df, summary = run_backtest(
             df_raw=df_raw,
@@ -410,21 +416,23 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
         )
 
     # === NEW: Metrics box above charts ===
-    st.markdown("### Backtest Metrics")
+    st.markdown("### Summary")
     with st.container():
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Trades Taken", f"{summary['trades']}")
-        m2.metric("Trades Won",   f"{summary['wins']}")
-        m3.metric("Trades Lost",  f"{summary['losses']}")
-        m4.metric("Trades Breach", f"{summary['breaches']}")
+        # Row 1
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Trades Taken", f"{summary['trades']}")
+        c2.metric("P&L",          f"${summary['total_pnl']:.2f}")
+        c3.metric("Wins",         f"{summary['wins']}")
+        c4.metric("Losses",       f"{summary['losses']}")
 
-        m5, m6, m7, m8 = st.columns(4)
-        m5.metric("Trades Broke", f"{summary['brokes']}")
-        m6.metric("P&L",          f"${summary['total_pnl']:.2f}")
-        m7.metric("Max Drawdown", f"${summary['max_drawdown']:.2f}")
-        m8.metric("Drawdown %",   f"{summary['max_drawdown_pct']:.2f}%")
+        # Row 2
+        c5, c6, c7, c8 = st.columns(4)
+        c5.metric("Breach",       f"{summary['breaches']}")
+        c6.metric("Broke",        f"{summary['brokes']}")
+        c7.metric("Drawdown",     f"${summary['max_drawdown']:.2f}")
+        c8.metric("Drawdown %",   f"{summary['max_drawdown_pct']:.2f}%")
 
-    # --- Charts / Plots (below metrics) ---
+    # Charts / Plots under metrics
     st.markdown("### Equity Curve")
     if equity_df.empty:
         st.info("No equity curve.")
@@ -436,7 +444,7 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
                              xaxis_title="",yaxis_title="Cash ($)")
         st.plotly_chart(fig_eq, use_container_width=True)
 
-    st.markdown("### VWAP & Bollinger Bands with Trade Markers")
+    st.markdown("### Price Chart with Indicators")
     fig_px = go.Figure()
     fig_px.add_trace(go.Scatter(x=df_out.index,y=df_out["vwap"],name="VWAP", mode="lines",line=dict(color="steelblue",width=2)))
     fig_px.add_trace(go.Scatter(x=df_out.index,y=df_out["bb_upper"],name="BB Upper", mode="lines",line=dict(color="orange",width=1.5)))
