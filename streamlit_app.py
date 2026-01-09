@@ -1,6 +1,4 @@
 
-# streamlit_app.py
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -13,15 +11,11 @@ from typing import List
 # ------------------------------------------------------------------------------------------
 st.set_page_config(page_title="Iron Condor Backtester", page_icon="📈", layout="wide")
 
-# === REMOVED: Easy Tab and tab layout ===
-# (Everything is now on a single page)
-
 # Minimal header
 st.markdown("## 📈 Iron Condor Backtester")
 
 # ------------------------------------------------------------------------------------------
-# === UPDATED: Single-page layout ===
-# 1) Data Files (must be first)
+# === Single-page layout: File Upload first ===
 # ------------------------------------------------------------------------------------------
 with st.container():
     st.subheader("Data Files")
@@ -34,7 +28,6 @@ has_csv = uploaded_csv is not None
 has_txt = uploaded_txt is not None
 
 # === NEW: Timeframe toggle under file upload ===
-# Shown only after CSV is uploaded; default is Daily
 if has_csv:
     timeframe_choice = st.radio(
         "Timeframe",
@@ -44,10 +37,28 @@ if has_csv:
         help="Resample the uploaded data to this frequency before indicators/backtest."
     )
 else:
-    timeframe_choice = "Daily"  # default if no CSV yet
+    timeframe_choice = "Daily"  # default until CSV is uploaded
+
+# === NEW: Timeframe-aware Bollinger Band window ===
+def bb_window_from_timeframe(choice: str, base_days: int = 20) -> int:
+    """
+    Return number of bars that represent ~base_days trading days for the selected timeframe.
+    1 trading day ≈ 390 minutes; 1 hour ≈ 60 minutes.
+    """
+    mapping = {
+        "Daily":      base_days,               # 20 bars
+        "Hourly":     int(base_days * 6.5),    # 20 * 6.5 = 130
+        "30-minute":  int(base_days * 13),     # 20 * 13  = 260
+        "15-minute":  int(base_days * 26),     # 20 * 26  = 520
+        "5-minute":   int(base_days * 78),     # 20 * 78  = 1,560
+        "1-minute":   int(base_days * 390),    # 20 * 390 = 7,800
+    }
+    return mapping.get(choice, base_days)
+
+bb_window = bb_window_from_timeframe(timeframe_choice)
 
 # ------------------------------------------------------------------------------------------
-# Helpers (cached) — unchanged logic
+# Helpers (cached) — unchanged, except BB uses dynamic window inside compute_indicators
 # ------------------------------------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def parse_blackout_txt(file) -> List[pd.Timestamp]:
@@ -75,15 +86,51 @@ def load_csv(file) -> pd.DataFrame:
     df.columns = [c.lower() for c in df.columns]
     return df
 
-@st.cache_data(show_spinner=False)
-def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    ma = df["vwap"].rolling(20).mean()
-    std = df["vwap"].rolling(20).std(ddof=0)
-    df["bb_mid"] = ma
-    df["bb_upper"] = ma + 2.0 * std
-    df["bb_lower"] = ma - 2.0 * std
+# Timeframe resampling helper
+def _freq_from_choice(choice: str) -> str:
+    return {
+        "Daily": "D",
+        "Hourly": "H",
+        "30-minute": "30min",
+        "15-minute": "15min",
+        "5-minute": "5min",
+        "1-minute": "T",
+    }.get(choice, "D")
 
+def resample_to_timeframe(df_raw: pd.DataFrame, choice: str) -> pd.DataFrame:
+    """Resample required columns to the selected timeframe, preserving lower-case column names."""
+    if df_raw.empty or "timestamp" not in df_raw.columns:
+        return df_raw
+    freq = _freq_from_choice(choice)
+    df = df_raw.copy()
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df = df.dropna(subset=["timestamp"]).sort_values("timestamp").set_index("timestamp")
+    agg = {}
+    if "open" in df.columns:   agg["open"]  = "first"
+    if "high" in df.columns:   agg["high"]  = "max"
+    if "low" in df.columns:    agg["low"]   = "min"
+    if "close" in df.columns:  agg["close"] = "last"
+    if "vwap" in df.columns:   agg["vwap"]  = "mean"  # simple mean if no volume
+    df_res = df.resample(freq).agg(agg)
+    df_res = df_res.dropna(how="any")
+    return df_res.reset_index()  # keep "timestamp" for downstream code
+
+@st.cache_data(show_spinner=False)
+def compute_indicators(df: pd.DataFrame, bb_window: int) -> pd.DataFrame:
+    """
+    Compute indicators; Bollinger Bands use a dynamic window tied to the selected timeframe.
+    Other indicators remain unchanged to preserve backtest behavior.
+    """
+    df = df.copy()
+
+    # --- Bollinger Bands on VWAP with timeframe-aware window ---
+    ma_vwap  = df["vwap"].rolling(bb_window, min_periods=bb_window).mean()
+    std_vwap = df["vwap"].rolling(bb_window, min_periods=bb_window).std(ddof=0)
+    df["bb_mid"]   = ma_vwap
+    df["bb_upper"] = ma_vwap + 2.0 * std_vwap
+    df["bb_lower"] = ma_vwap - 2.0 * std_vwap
+
+    # --- Existing indicators (unchanged) ---
     delta = df["close"].diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
@@ -105,8 +152,11 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     dx = (abs(plus_di - minus_di) / (plus_di + minus_di).replace(0, np.nan)) * 100
     df["adx"] = dx.ewm(alpha=1/14, adjust=False).mean().bfill().ffill()
 
+    # Keep existing SMA20 for "VWAP vs SMA20" trend method (non-goal to modify other indicators)
     df["vwap_sma20"] = df["vwap"].rolling(20).mean()
-    df["plus_di"] = plus_di; df["minus_di"] = minus_di
+
+    df["plus_di"] = plus_di
+    df["minus_di"] = minus_di
     df["bb_width"] = df["bb_upper"] - df["bb_lower"]
     df["bb_tightening"] = (
         (df["bb_width"] < df["bb_width"].shift(1)) &
@@ -133,35 +183,6 @@ def compute_trend_flags(df: pd.DataFrame, method: str) -> pd.DataFrame:
         df["trend_up"] = False; df["trend_down"] = False
     return df
 
-# === NEW: Timeframe resampling helper (applied before backtest) ===
-def _freq_from_choice(choice: str) -> str:
-    return {
-        "Daily": "D",
-        "Hourly": "H",
-        "30-minute": "30min",
-        "15-minute": "15min",
-        "5-minute": "5min",
-        "1-minute": "T",
-    }.get(choice, "D")
-
-def resample_to_timeframe(df_raw: pd.DataFrame, choice: str) -> pd.DataFrame:
-    """Resample required columns to the selected timeframe, preserving lower-case column names."""
-    if df_raw.empty or "timestamp" not in df_raw.columns:
-        return df_raw
-    freq = _freq_from_choice(choice)
-    df = df_raw.copy()
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
-    df = df.dropna(subset=["timestamp"]).sort_values("timestamp").set_index("timestamp")
-    agg = {}
-    if "open" in df.columns:   agg["open"]  = "first"   # not required but preserved if present
-    if "high" in df.columns:   agg["high"]  = "max"
-    if "low" in df.columns:    agg["low"]   = "min"
-    if "close" in df.columns:  agg["close"] = "last"
-    if "vwap" in df.columns:   agg["vwap"]  = "mean"    # simple mean if no volume provided
-    df_res = df.resample(freq).agg(agg)
-    df_res = df_res.dropna(how="any")
-    return df_res.reset_index()  # keep "timestamp" column for downstream code
-
 # -------------------------------- FULL BACKTEST (cached) -----------------------------------
 @st.cache_data(show_spinner=True)
 def run_backtest(
@@ -176,12 +197,15 @@ def run_backtest(
     trend_method: str,
     wing_ext_pct: float,
     days_before: int,
-    days_after: int
+    days_after: int,
+    bb_window: int,   # pass timeframe-aware BB window
 ):
     df = df_raw.copy()
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df = df.sort_values("timestamp").set_index("timestamp")
-    df = compute_indicators(df)
+
+    # Indicators with timeframe-aware Bollinger window
+    df = compute_indicators(df, bb_window=bb_window)
     df = compute_trend_flags(df, trend_method)
 
     cond_adx = df["adx"] < 20
@@ -330,7 +354,7 @@ def run_backtest(
 
     equity_df = pd.DataFrame(eq).set_index("date") if eq else pd.DataFrame(columns=["cash"])
 
-    # summary
+    # summary (unchanged)
     wins     = (trades_df["outcome"]=="win").sum()     if not trades_df.empty else 0
     losses   = (trades_df["outcome"]=="loss").sum()    if not trades_df.empty else 0
     breaches = (trades_df["outcome"]=="breach").sum()  if not trades_df.empty else 0
@@ -341,7 +365,7 @@ def run_backtest(
     win_rate = (100*wins/len(trades_df)) if not trades_df.empty else 0.0
     total_pnl = float(trades_df["pnl"].sum()) if not trades_df.empty else 0.0
 
-    # max drawdown
+    # max drawdown (unchanged)
     if not equity_df.empty and not equity_df["cash"].empty:
         run_max = equity_df["cash"].cummax()
         dd = run_max - equity_df["cash"]
@@ -372,17 +396,15 @@ if has_csv:
         st.subheader("Configuration")
         left, right = st.columns(2)
 
-        # Left: Backtest Parameters (labels aligned with your screenshot; values preserved)
         with left:
             st.markdown("**Backtest Parameters**")
-            days_before = st.number_input("Days Before Earnings", value=7)     # same variable used for blackout window
+            days_before = st.number_input("Days Before Earnings", value=7)
             days_after  = st.number_input("Days After Earnings",  value=1)
             adx_exit    = st.number_input("ADX Exit Threshold",   value=30)
             vwap_accept_k = st.number_input("VWAP Exit Distance (k)", value=1.0)
             hv_min      = st.number_input("Min Historical Vol (%)", value=15.0)
             hv_max      = st.number_input("Max Historical Vol (%)", value=40.0)
 
-        # Right: Trend Bias Settings
         with right:
             st.markdown("**Trend Bias Settings**")
             use_trend_bias = st.checkbox("Enable Trend Bias")
@@ -390,7 +412,6 @@ if has_csv:
             trend_bias_strength = st.number_input("Bias Strength ($)", value=2.0, disabled=not use_trend_bias)
             wing_ext_pct = st.number_input("Wing Extension (%)", value=20.0)
 
-    # Run Backtest (disabled until both files present)
     run_disabled = not (has_csv and has_txt)
     run_clicked = st.button("Run Backtest", disabled=run_disabled)
     if run_disabled:
@@ -414,22 +435,23 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
     missing = required - set(df_raw.columns)
     blackout_dates = parse_blackout_txt(uploaded_txt)
 
-    # Fallback chart if CSV lacks required columns for full logic (use resampled if available)
+    # Fallback chart if CSV lacks required columns for full logic
     if missing:
         st.markdown("### Summary")
         st.info("No results yet. CSV is missing required columns. Showing basic price chart.")
         df_raw["timestamp"] = pd.to_datetime(df_raw.get("timestamp"), errors="coerce")
         df = df_raw.dropna(subset=["timestamp"]).sort_values("timestamp").set_index("timestamp")
 
-        ma = df["close"].rolling(20).mean()
-        ub = ma + 2 * df["close"].rolling(20).std()
-        lb = ma - 2 * df["close"].rolling(20).std()
+        # Fallback BB also uses timeframe-aware window for visual consistency
+        ma = df["close"].rolling(bb_window, min_periods=bb_window).mean()
+        ub = ma + 2 * df["close"].rolling(bb_window, min_periods=bb_window).std(ddof=0)
+        lb = ma - 2 * df["close"].rolling(bb_window, min_periods=bb_window).std(ddof=0)
 
         st.markdown("### Equity Curve")
         st.info("No equity curve.")
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df.index,y=df["close"],name="Close",mode="lines",line=dict(color="#60A5FA",width=2.5)))
-        fig.add_trace(go.Scatter(x=df.index,y=ma,name="BB Mid (20)",mode="lines",line=dict(color="gray",width=1.2)))
+        fig.add_trace(go.Scatter(x=df.index,y=ma,name="BB Mid (timeframe-aware)",mode="lines",line=dict(color="gray",width=1.2)))
         fig.add_trace(go.Scatter(x=df.index,y=ub,name="BB Upper",mode="lines",line=dict(color="orange",width=1.2)))
         fig.add_trace(go.Scatter(x=df.index,y=lb,name="BB Lower",mode="lines",line=dict(color="orange",width=1.2)))
 
@@ -446,7 +468,7 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
         st.plotly_chart(fig, use_container_width=True)
         st.stop()
 
-    # Full backtest on resampled data
+    # Full backtest on resampled data with timeframe-aware Bollinger window
     with st.spinner("Running backtest…"):
         df_out, trades_df, equity_df, summary = run_backtest(
             df_raw=df_raw,
@@ -458,10 +480,11 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
             bias_strength=trend_bias_strength,
             trend_method=trend_method,
             wing_ext_pct=wing_ext_pct,
-            days_before=days_before, days_after=days_after
+            days_before=days_before, days_after=days_after,
+            bb_window=bb_window,
         )
 
-    # === Metrics box above charts (unchanged placement) ===
+    # Metrics box (unchanged)
     st.markdown("### Summary")
     with st.container():
         c1, c2, c3, c4 = st.columns(4)
@@ -475,18 +498,31 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
         c7.metric("Drawdown",     f"${summary['max_drawdown']:.2f}")
         c8.metric("Drawdown %",   f"{summary['max_drawdown_pct']:.2f}%")
 
-    # Charts / Plots under metrics
+    # === Equity Curve (with Plotly update_layout fix) ===
     st.markdown("### Equity Curve")
     if equity_df.empty:
         st.info("No equity curve.")
     else:
         fig_eq = go.Figure()
-        fig_eq.add_trace(go.Scatter(x=equity_df.index,y=equity_df["cash"],name="Equity",
-                                    mode="lines",line=dict(color="#22D3EE",width=3)))
-        fig_eq.update_layout(template="plotly_dark",margin=dict(l=10,r=10,t=40,b=10),
-                             xaxis_title="",yaxis_title="Cash ($)")
+        fig_eq.add_trace(
+            go.Scatter(
+                x=equity_df.index,
+                y=equity_df["cash"],
+                name="Equity",
+                mode="lines",
+                line=dict(color="#22D3EE", width=3),
+            )
+        )
+        # === FIX: correct method name (no backslash)
+        fig_eq.update_layout(
+            template="plotly_dark",
+            margin=dict(l=10, r=10, t=40, b=10),
+            xaxis_title="",
+            yaxis_title="Cash ($)",
+        )
         st.plotly_chart(fig_eq, use_container_width=True)
 
+    # Price Chart with Indicators (unchanged)
     st.markdown("### Price Chart with Indicators")
     fig_px = go.Figure()
     fig_px.add_trace(go.Scatter(x=df_out.index,y=df_out["vwap"],name="VWAP", mode="lines",line=dict(color="steelblue",width=2)))
@@ -545,7 +581,6 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
     if trades_df.empty:
         st.info("No trades to display for the current file and timeframe.")
     else:
-        # Light formatting for readability; keep minimal
         trades_display = trades_df.copy()
         # Format numeric columns if present
         for col in ["short_put","long_put","short_call","long_call","net_credit","expiry_close","pnl"]:
@@ -557,5 +592,3 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
                 trades_display[dcol] = pd.to_datetime(trades_display[dcol]).dt.strftime("%Y-%m-%d %H:%M")
         # Scrollable table under the chart
         st.dataframe(trades_display, use_container_width=True, height=320)
-
-# ----------------------------------- END -----------------------------------
