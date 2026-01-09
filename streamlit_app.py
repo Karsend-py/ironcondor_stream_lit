@@ -1466,7 +1466,7 @@ else:
     # Polling UI (without busy waiting): one light refresh
     if auto_refresh:
         time.sleep(1.0)
-        st.experimental_rerun()
+        st.rerun()
 
 # =========================================================
 # Render results when background job completes
