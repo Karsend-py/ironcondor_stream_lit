@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -34,7 +35,7 @@ has_txt = uploaded_txt is not None
 # Helpers (cached) — unchanged logic
 # ------------------------------------------------------------------------------------------
 @st.cache_data(show_spinner=False)
-def parse_blackout_txt(file) -&gt; List[pd.Timestamp]:
+def parse_blackout_txt(file) -> List[pd.Timestamp]:  # === FIX: replace HTML entities ===
     if not file:
         return []
     raw = file.read()
@@ -54,13 +55,13 @@ def parse_blackout_txt(file) -&gt; List[pd.Timestamp]:
     return out
 
 @st.cache_data(show_spinner=False)
-def load_csv(file) -&gt; pd.DataFrame:
+def load_csv(file) -> pd.DataFrame:  # === FIX: replace HTML entities ===
     df = pd.read_csv(file)
     df.columns = [c.lower() for c in df.columns]
     return df
 
 @st.cache_data(show_spinner=False)
-def compute_indicators(df: pd.DataFrame) -&gt; pd.DataFrame:
+def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:  # === FIX: replace HTML entities ===
     df = df.copy()
     ma = df["vwap"].rolling(20).mean()
     std = df["vwap"].rolling(20).std(ddof=0)
@@ -78,8 +79,8 @@ def compute_indicators(df: pd.DataFrame) -&gt; pd.DataFrame:
 
     up_move = df["high"].diff()
     down_move = df["low"].diff() * -1
-    plus_dm = ((up_move &gt; down_move) &amp; (up_move &gt; 0)) * up_move
-    minus_dm = ((down_move &gt; up_move) &amp; (down_move &gt; 0)) * down_move
+    plus_dm = ((up_move > down_move) & (up_move > 0)) * up_move     # === FIX
+    minus_dm = ((down_move > up_move) & (down_move > 0)) * down_move  # === FIX
     tr = pd.concat([(df["high"] - df["low"]),
                     (df["high"] - df["close"].shift()).abs(),
                     (df["low"] - df["close"].shift()).abs()], axis=1).max(axis=1)
@@ -90,31 +91,33 @@ def compute_indicators(df: pd.DataFrame) -&gt; pd.DataFrame:
     df["adx"] = dx.ewm(alpha=1/14, adjust=False).mean().bfill().ffill()
 
     df["vwap_sma20"] = df["vwap"].rolling(20).mean()
-    df["plus_di"] = plus_di; df["minus_di"] = minus_di
+    df["plus_di"] = plus_di
+    df["minus_di"] = minus_di
     df["bb_width"] = df["bb_upper"] - df["bb_lower"]
     df["bb_tightening"] = (
-        (df["bb_width"] &lt; df["bb_width"].shift(1)) &amp;
-        (df["bb_width"] &lt; df["bb_width"].rolling(20, min_periods=5).median())
+        (df["bb_width"] < df["bb_width"].shift(1)) &
+        (df["bb_width"] < df["bb_width"].rolling(20, min_periods=5).median())
     ).fillna(False)
 
     log_ret = np.log(df["close"]).diff()
     df["hv"] = (log_ret.rolling(21).std(ddof=0) * np.sqrt(252) * 100).bfill().ffill()
     return df
 
-def compute_trend_flags(df: pd.DataFrame, method: str) -&gt; pd.DataFrame:
+def compute_trend_flags(df: pd.DataFrame, method: str) -> pd.DataFrame:  # === FIX
     df = df.copy()
     if method == "VWAP Slope":
         df["vwap_delta"] = df["vwap"].diff()
-        df["trend_up"] = df["vwap_delta"] &gt; 0
-        df["trend_down"] = df["vwap_delta"] &lt; 0
+        df["trend_up"] = df["vwap_delta"] > 0
+        df["trend_down"] = df["vwap_delta"] < 0
     elif method == "VWAP vs SMA20":
-        df["trend_up"] = df["vwap"] &gt; df["vwap_sma20"]
-        df["trend_down"] = df["vwap"] &lt; df["vwap_sma20"]
+        df["trend_up"] = df["vwap"] > df["vwap_sma20"]
+        df["trend_down"] = df["vwap"] < df["vwap_sma20"]
     elif method == "ADX + DI":
-        df["trend_up"] = (df["plus_di"] &gt; df["minus_di"]) &amp; (df["adx"] &gt; 20)
-        df["trend_down"] = (df["minus_di"] &gt; df["plus_di"]) &amp; (df["adx"] &gt; 20)
+        df["trend_up"] = (df["plus_di"] > df["minus_di"]) & (df["adx"] > 20)
+        df["trend_down"] = (df["minus_di"] > df["plus_di"]) & (df["adx"] > 20)
     else:
-        df["trend_up"] = False; df["trend_down"] = False
+        df["trend_up"] = False
+        df["trend_down"] = False
     return df
 
 @st.cache_data(show_spinner=True)
@@ -138,37 +141,43 @@ def run_backtest(
     df = compute_indicators(df)
     df = compute_trend_flags(df, trend_method)
 
-    cond_adx = df["adx"] &lt; 20
-    cond_rsi = (df["rsi"] &gt;= 40) &amp; (df["rsi"] &lt;= 60)
-    cond_hv = (df["hv"] &gt;= hv_min) &amp; (df["hv"] &lt;= hv_max)
-    combined = cond_adx &amp; cond_rsi &amp; cond_hv
+    cond_adx = df["adx"] < 20                      # === FIX
+    cond_rsi = (df["rsi"] >= 40) & (df["rsi"] <= 60)  # === FIX
+    cond_hv  = (df["hv"] >= hv_min) & (df["hv"] <= hv_max)  # === FIX
+    combined = cond_adx & cond_rsi & cond_hv       # === FIX
 
     def in_blackout(day):
         day_n = pd.Timestamp(day).normalize()
         for e in blackout_dates:
             e_n = pd.Timestamp(e).normalize()
-            if (e_n - timedelta(days=days_before)) &lt;= day_n &lt;= e_n:
+            if (e_n - timedelta(days=days_before)) <= day_n <= e_n:           # === FIX
                 return True
-            if e_n &lt;= day_n &lt;= (e_n + timedelta(days=days_after)):
+            if e_n <= day_n <= (e_n + timedelta(days=days_after)):            # === FIX
                 return True
         return False
 
     mask_blackout = df.index.to_series().apply(in_blackout)
-    eligible = combined &amp; (~mask_blackout.values)
+    eligible = combined & (~mask_blackout.values)  # === FIX
 
-    per_leg_fee = 0.65; mult = 100
+    per_leg_fee = 0.65
+    mult = 100
+
     def round_to(x, step=1.0):
         return float(np.round(x / step) * step)
 
     def eval_condor(exp_close, sp, lp, sc, lc, credit):
-        put_w = sp - lp; call_w = lc - sc
-        if sp &lt;= exp_close &lt;= sc:
+        put_w = sp - lp
+        call_w = lc - sc
+        if sp <= exp_close <= sc:  # === FIX
             return credit * mult - 4 * per_leg_fee, "win"
-        loss_w = call_w if exp_close &gt; sc else put_w
+        loss_w = call_w if exp_close > sc else put_w  # === FIX
         return -(loss_w - credit) * mult - 4 * per_leg_fee, "loss"
 
     idx = df.index
-    open_positions = []; trades = []; cash = 0.0; eq = []
+    open_positions = []
+    trades = []
+    cash = 0.0
+    eq = []
 
     for i in range(len(idx)):
         d = idx[i]
@@ -178,29 +187,31 @@ def run_backtest(
             for pos in open_positions:
                 cur = df.loc[d, "close"]
                 pnl_today, _ = eval_condor(cur, pos["sp"], pos["lp"], pos["sc"], pos["lc"], pos["credit"])
-                breach = (cur &lt; pos["sp"]) or (cur &gt; pos["sc"])
-                broke  = (cur &lt; pos["lp"]) or (cur &gt; pos["lc"])
+                breach = (cur < pos["sp"]) or (cur > pos["sc"])  # === FIX
+                broke  = (cur < pos["lp"]) or (cur > pos["lc"])  # === FIX
 
-                adx_out = df.loc[d,"adx"] &gt;= int(adx_exit_thr)
-                vwap_today = df.loc[d,"vwap"]; vwap_prev = df.iloc[i-1]["vwap"] if i&gt;0 else vwap_today
+                adx_out = df.loc[d, "adx"] >= int(adx_exit_thr)  # === FIX
+                vwap_today = df.loc[d, "vwap"]
+                vwap_prev = df.iloc[i-1]["vwap"] if i > 0 else vwap_today  # === FIX
                 delta_today = vwap_today - vwap_prev
-                delta_prev = (df.iloc[i-1]["vwap"] - df.iloc[i-2]["vwap"]) if i&gt;1 else 0.0
+                delta_prev = (df.iloc[i-1]["vwap"] - df.iloc[i-2]["vwap"]) if i > 1 else 0.0  # === FIX
                 slope_flip = (np.sign(delta_today) != 0) and (np.sign(delta_prev) != 0) and (np.sign(delta_today) != np.sign(delta_prev))
-                bb_half = df.loc[d,"bb_upper"] - df.loc[d,"bb_mid"]
+                bb_half = df.loc[d, "bb_upper"] - df.loc[d, "bb_mid"]
                 accept_dist = float(vwap_k) * bb_half
-                away_enough = abs(cur - vwap_today) &gt;= accept_dist
-                on_slope = ((delta_today &gt; 0 and cur &gt; vwap_today) or (delta_today &lt; 0 and cur &lt; vwap_today))
+                away_enough = abs(cur - vwap_today) >= accept_dist  # === FIX
+                on_slope = ((delta_today > 0 and cur > vwap_today) or (delta_today < 0 and cur < vwap_today))  # === FIX
                 vwap_exit = slope_flip and away_enough and on_slope
 
-                exited = False; flag=None
-                if (d &lt; pos["expiry"]) and broke:
-                    exited=True; flag="broke"
-                elif (d &lt; pos["expiry"]) and breach:
-                    exited=True; flag="breach"
-                elif (d &lt; pos["expiry"]) and adx_out:
-                    exited=True; flag="adx_exit"
-                elif (d &lt; pos["expiry"]) and vwap_exit:
-                    exited=True; flag="vwap_exit"
+                exited = False
+                flag = None
+                if (d < pos["expiry"]) and broke:
+                    exited = True; flag = "broke"
+                elif (d < pos["expiry"]) and breach:
+                    exited = True; flag = "breach"
+                elif (d < pos["expiry"]) and adx_out:
+                    exited = True; flag = "adx_exit"
+                elif (d < pos["expiry"]) and vwap_exit:
+                    exited = True; flag = "vwap_exit"
 
                 if exited:
                     cash += pnl_today
@@ -219,8 +230,8 @@ def run_backtest(
             keep = []
             for pos in open_positions:
                 if d == pos["expiry"]:
-                    exp_close = df.loc[d,"close"]
-                    pnl,out = eval_condor(exp_close, pos["sp"], pos["lp"], pos["sc"], pos["lc"], pos["credit"])
+                    exp_close = df.loc[d, "close"]
+                    pnl, out = eval_condor(exp_close, pos["sp"], pos["lp"], pos["sc"], pos["lc"], pos["credit"])
                     cash += pnl
                     trades.append({
                         "entry_date": pos["entry"], "expiry_date": d,
@@ -238,11 +249,11 @@ def run_backtest(
             if use_bias:
                 bias = float(bias_strength)
                 if df["trend_up"].iloc[i]:
-                    sp = round_to(float(row["bb_lower"]) + 0.5*bias, 1.0)
-                    sc = round_to(float(row["bb_upper"]) + 1.0*bias, 1.0)
+                    sp = round_to(float(row["bb_lower"]) + 0.5 * bias, 1.0)
+                    sc = round_to(float(row["bb_upper"]) + 1.0 * bias, 1.0)
                 elif df["trend_down"].iloc[i]:
-                    sp = round_to(float(row["bb_lower"]) - 1.0*bias, 1.0)
-                    sc = round_to(float(row["bb_upper"]) - 0.5*bias, 1.0)
+                    sp = round_to(float(row["bb_lower"]) - 1.0 * bias, 1.0)
+                    sc = round_to(float(row["bb_upper"]) - 0.5 * bias, 1.0)
                 else:
                     sp = round_to(float(row["bb_lower"]), 1.0)
                     sc = round_to(float(row["bb_upper"]), 1.0)
@@ -250,11 +261,11 @@ def run_backtest(
                 sp = round_to(float(row["bb_lower"]), 1.0)
                 sc = round_to(float(row["bb_upper"]), 1.0)
 
-            prev_up = bool(df["trend_up"].iloc[i-1]) if i&gt;0 else False
-            prev_dn = bool(df["trend_down"].iloc[i-1]) if i&gt;0 else False
+            prev_up = bool(df["trend_up"].iloc[i-1]) if i > 0 else False  # === FIX
+            prev_dn = bool(df["trend_down"].iloc[i-1]) if i > 0 else False  # === FIX
             tightening = bool(df["bb_tightening"].iloc[i])
 
-            ext = 1.0 + max(0.0, float(wing_ext_pct))/100.0
+            ext = 1.0 + max(0.0, float(wing_ext_pct)) / 100.0
             put_w  = 5.0 * ext if (df["trend_up"].iloc[i] and prev_dn and tightening) else 5.0
             call_w = 5.0 * ext if (df["trend_down"].iloc[i] and prev_up and tightening) else 5.0
 
@@ -263,9 +274,9 @@ def run_backtest(
             credit = 0.30 * min(call_w, put_w)
 
             # find next Friday (≤ 5 DTE)
-            end = min(i+5, len(idx)-1)
+            end = min(i + 5, len(idx) - 1)
             expiry = None
-            for j in range(i, end+1):
+            for j in range(i, end + 1):
                 if idx[j].weekday() == 4:
                     expiry = idx[j]; break
             if expiry is None:
@@ -285,14 +296,14 @@ def run_backtest(
     equity_df = pd.DataFrame(eq).set_index("date") if eq else pd.DataFrame(columns=["cash"])
 
     # summary
-    wins      = (trades_df["outcome"]=="win").sum()      if not trades_df.empty else 0
-    losses    = (trades_df["outcome"]=="loss").sum()     if not trades_df.empty else 0
-    breaches  = (trades_df["outcome"]=="breach").sum()   if not trades_df.empty else 0
-    adx_exits = (trades_df["outcome"]=="adx_exit").sum() if not trades_df.empty else 0
-    vwap_exits= (trades_df["outcome"]=="vwap_exit").sum()if not trades_df.empty else 0
-    brokes    = (trades_df["outcome"]=="broke").sum()    if not trades_df.empty else 0
+    wins      = (trades_df["outcome"] == "win").sum()      if not trades_df.empty else 0
+    losses    = (trades_df["outcome"] == "loss").sum()     if not trades_df.empty else 0
+    breaches  = (trades_df["outcome"] == "breach").sum()   if not trades_df.empty else 0
+    adx_exits = (trades_df["outcome"] == "adx_exit").sum() if not trades_df.empty else 0
+    vwap_exits= (trades_df["outcome"] == "vwap_exit").sum()if not trades_df.empty else 0
+    brokes    = (trades_df["outcome"] == "broke").sum()    if not trades_df.empty else 0
 
-    win_rate   = (100*wins/len(trades_df)) if not trades_df.empty else 0.0
+    win_rate   = (100 * wins / len(trades_df)) if not trades_df.empty else 0.0
     total_pnl  = float(trades_df["pnl"].sum()) if not trades_df.empty else 0.0
 
     # max drawdown
@@ -300,13 +311,14 @@ def run_backtest(
         run_max = equity_df["cash"].cummax()
         dd = run_max - equity_df["cash"]
         max_dd_val = float(dd.max()) if not dd.empty else 0.0
-        if max_dd_val &gt; 0:
+        if max_dd_val > 0:
             dd_idx = dd.idxmax()
-            max_dd_pct = (max_dd_val/run_max.loc[dd_idx])*100 if run_max.loc[dd_idx]!=0 else 0.0
+            max_dd_pct = (max_dd_val / run_max.loc[dd_idx]) * 100 if run_max.loc[dd_idx] != 0 else 0.0
         else:
             max_dd_pct = 0.0
     else:
-        max_dd_val = 0.0; max_dd_pct = 0.0
+        max_dd_val = 0.0
+        max_dd_pct = 0.0
 
     summary = {
         "trades": int(len(trades_df)),
@@ -384,7 +396,7 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
         fig.add_trace(go.Scatter(x=df.index,y=ub,name="BB Upper",mode="lines",line=dict(color="orange",width=1.2)))
         fig.add_trace(go.Scatter(x=df.index,y=lb,name="BB Lower",mode="lines",line=dict(color="orange",width=1.2)))
 
-        if blackout_dates and len(df)&gt;0:
+        if blackout_dates and len(df) > 0:  # === FIX
             for e in blackout_dates:
                 start = e - timedelta(days=int(days_before))
                 end   = e + timedelta(days=int(days_after))
@@ -418,7 +430,7 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
         # Row 1
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Trades Taken", f"{summary['trades']}")
-        c2.metric("P&amp;L",          f"${summary['total_pnl']:.2f}")
+        c2.metric("P&L",          f"${summary['total_pnl']:.2f}")  # === FIX
         c3.metric("Wins",         f"{summary['wins']}")
         c4.metric("Losses",       f"{summary['losses']}")
 
@@ -470,8 +482,8 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
                 name=name, mode="markers",
                 marker=dict(symbol=symbol,color=color,size=9)
             ))
-        wins_m   = (trades_df["outcome"]=="win")
-        losses_m = (trades_df["outcome"]=="loss")
+        wins_m   = (trades_df["outcome"] == "win")
+        losses_m = (trades_df["outcome"] == "loss")
         add_pts(wins_m,   "Entry (win)","green","triangle-up")
         add_pts(losses_m, "Entry (loss)","red","triangle-up")
 
@@ -482,12 +494,12 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
                 name=name, mode="markers",
                 marker=dict(symbol=symbol,color=color,size=9)
             ))
-        add_exit((trades_df["outcome"]=="win"),      "Exit (win)","green","x")
-        add_exit((trades_df["outcome"]=="loss"),     "Exit (loss)","red","x")
-        add_exit((trades_df["outcome"]=="breach"),   "Exit (breach)","red","triangle-down")
-        add_exit((trades_df["outcome"]=="adx_exit"), "Exit (ADX)","purple","square")
-        add_exit((trades_df["outcome"]=="vwap_exit"),"Exit (VWAP)","orange","diamond")
-        add_exit((trades_df["outcome"]=="broke"),    "Exit (broke)","black","star")
+        add_exit((trades_df["outcome"] == "win"),      "Exit (win)","green","x")
+        add_exit((trades_df["outcome"] == "loss"),     "Exit (loss)","red","x")
+        add_exit((trades_df["outcome"] == "breach"),   "Exit (breach)","red","triangle-down")
+        add_exit((trades_df["outcome"] == "adx_exit"), "Exit (ADX)","purple","square")
+        add_exit((trades_df["outcome"] == "vwap_exit"),"Exit (VWAP)","orange","diamond")
+        add_exit((trades_df["outcome"] == "broke"),    "Exit (broke)","black","star")
 
     fig_px.update_layout(template="plotly_dark",margin=dict(l=10,r=10,t=40,b=10),
                          xaxis_title="",yaxis_title="Price ($)",
