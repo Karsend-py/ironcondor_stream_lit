@@ -11,7 +11,6 @@ from typing import List
 st.set_page_config(page_title="Iron Condor Backtester", page_icon="📈", layout="wide")
 st.markdown("## 📈 Iron Condor Backtester")
 
-# Uploads
 with st.container():
     st.subheader("Data Files")
     st.write("Upload the input CSV and blackout dates file to begin.")
@@ -22,7 +21,6 @@ with st.container():
 has_csv = uploaded_csv is not None
 has_txt = uploaded_txt is not None
 
-# Timeframe toggle
 if has_csv:
     timeframe_choice = st.radio(
         "Timeframe",
@@ -34,7 +32,6 @@ if has_csv:
 else:
     timeframe_choice = "Daily"
 
-# Timeframe-aware BB window
 def bb_window_from_timeframe(choice: str, base_days: int = 20) -> int:
     mapping = {
         "Daily":      base_days,
@@ -48,7 +45,6 @@ def bb_window_from_timeframe(choice: str, base_days: int = 20) -> int:
 
 bb_window = bb_window_from_timeframe(timeframe_choice)
 
-# Helpers (cached)
 @st.cache_data(show_spinner=False)
 def parse_blackout_txt(file) -> List[pd.Timestamp]:
     if not file:
@@ -157,7 +153,6 @@ def compute_trend_flags(df: pd.DataFrame, method: str) -> pd.DataFrame:
         df["trend_up"] = False; df["trend_down"] = False
     return df
 
-# Backtest (cached) — unchanged trade logic; adds rejected logging
 @st.cache_data(show_spinner=True)
 def run_backtest(
     df_raw: pd.DataFrame,
@@ -198,7 +193,6 @@ def run_backtest(
     combined = cond_adx & cond_rsi & cond_hv
     eligible = combined & (~mask_blackout.values)
 
-    # Collect diagnostics for rejected (evaluated but not taken)
     rejected = []
     for d, ok in zip(df.index, eligible.values):
         if not ok:
@@ -310,7 +304,6 @@ def run_backtest(
             lp = round_to(sp - put_w, 1.0)
             lc = round_to(sc + call_w, 1.0)
             credit = 0.30 * min(call_w, put_w)
-
             end = min(i+5, len(idx)-1)
             expiry = None
             for j in range(i, end+1):
@@ -325,7 +318,8 @@ def run_backtest(
         eq.append({"date": d, "cash": cash})
 
     trades_df = pd.DataFrame(trades)
-    if not trades_df.empty: trades_df["cum_pnl"] = trades_df["pnl"].cumsum()
+    if not trades_df.empty:
+        trades_df["cum_pnl"] = trades_df["pnl"].cumsum()
     equity_df = pd.DataFrame(eq).set_index("date") if eq else pd.DataFrame(columns=["cash"])
 
     wins     = (trades_df["outcome"]=="win").sum()     if not trades_df.empty else 0
@@ -344,7 +338,8 @@ def run_backtest(
         if max_dd_val>0:
             dd_idx = dd.idxmax()
             max_dd_pct = (max_dd_val/run_max.loc[dd_idx])*100 if run_max.loc[dd_idx]!=0 else 0.0
-        else: max_dd_pct = 0.0
+        else:
+            max_dd_pct = 0.0
     else:
         max_dd_val = 0.0; max_dd_pct = 0.0
 
@@ -360,7 +355,6 @@ def run_backtest(
     rejected_df = pd.DataFrame(rejected)
     return df, trades_df, equity_df, summary, rejected_df
 
-# Configuration
 if has_csv:
     with st.container():
         st.subheader("Configuration")
@@ -387,7 +381,6 @@ if has_csv:
 else:
     st.info("Upload a CSV to reveal configuration and the backtest button.")
 
-# Results
 if has_csv and 'run_clicked' in locals() and run_clicked:
     if not uploaded_txt:
         st.error("Upload blackout .txt to proceed.")
@@ -441,8 +434,6 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
             bb_window=bb_window,
         )
 
-    # === Top Stats Section (Option Alpha–style) ===
-    # compute risk vectorized from executed trades
     PER_LEG_FEE = 0.65
     MULT = 100.0
     if not trades_df.empty:
@@ -500,7 +491,6 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
     breach_n  = int(trades_df["outcome"].eq("breach").sum()) if count>0 else 0
     broke_n   = int(trades_df["outcome"].eq("broke").sum())  if count>0 else 0
 
-    # Grid: Stats
     st.markdown("### Summary")
     st.markdown("#### Stats")
     s1, s2, s3, s4, s5, s6 = st.columns(6)
@@ -511,7 +501,6 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
     s5.metric("Max Drawdown", f"${max_dd_val:.2f}", delta=f"{-abs(max_dd_val):+.2f}")
     s6.metric("Profit Factor", f"{profit_factor:.2f}" if not np.isnan(profit_factor) else "—")
 
-    # Grid: Positions
     st.markdown("#### Positions")
     p1, p2, p3, p4, p5, p6 = st.columns(6)
     p1.metric("Count", f"{count}")
@@ -521,7 +510,6 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
     p5.metric("Worst Loss", f"${worst_loss:.2f}", delta=f"{worst_loss:+.2f}")
     p6.metric("Win Streak", f"{win_streak}")
 
-    # Grid: Averages
     st.markdown("#### Averages")
     a1, a2, a3, a4, a5 = st.columns(5)
     a1.metric("Avg P/L", f"${avg_pl:.2f}", delta=f"{avg_pl:+.2f}")
@@ -530,7 +518,6 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
     a4.metric("Reward / Risk", f"{reward_risk:.2f}" if not np.isnan(reward_risk) else "—")
     a5.metric("Loss Streak", f"{loss_streak}")
 
-    # Grid: Exits
     st.markdown("#### Exits")
     e1, e2, e3, e4, e5 = st.columns(5)
     e1.metric("Wins", f"{wins_n}")
@@ -539,10 +526,8 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
     e4.metric("Breach", f"{breach_n}")
     e5.metric("Broke", f"{broke_n}")
 
-    # === Filtered (Rejected Trades) Diagnostic ===
     if "show_rejected_panel" not in st.session_state:
         st.session_state.show_rejected_panel = False
-
     filtered_count = int(len(rejected_df)) if not rejected_df.empty else 0
     diag_col = st.columns(1)[0]
     if diag_col.button(f"Filtered (rejected): {filtered_count}", help="Click to open diagnostic panel"):
@@ -554,20 +539,17 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
         if rejected_df.empty:
             st.info("No rejected evaluations to display.")
         else:
-            # reason chips with counts (non-interactive)
             reasons_series = rejected_df["reasons"].str.split(", ").explode()
             counts = reasons_series.value_counts().reset_index()
             counts.columns = ["Reason", "Count"]
-            chips_row = st.columns(min(6, len(counts)) or 1)
+            chips = st.columns(min(6, len(counts)) or 1)
             for i, (_, row) in enumerate(counts.iterrows()):
-                chips_row[i % len(chips_row)].button(f"{row['Reason']} • {row['Count']}", disabled=True)
-            # scrollable list/table
+                chips[i % len(chips)].button(f"{row['Reason']} • {row['Count']}", disabled=True)
             display_cols = ["date","reasons","adx","rsi","hv","blackout"]
             tbl = rejected_df.copy()
             tbl["date"] = pd.to_datetime(tbl["date"]).dt.strftime("%Y-%m-%d %H:%M")
             st.dataframe(tbl[display_cols].sort_values("date"), use_container_width=True, height=360)
 
-    # === Monthly P/L (collapsible, table only) ===
     with st.expander("Monthly P/L", expanded=False):
         if trades_df.empty:
             st.info("No trades for monthly summary.")
@@ -577,7 +559,6 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
             monthly_tbl = mt.groupby("month", as_index=False)["pnl"].sum().rename(columns={"pnl":"monthly_pnl"})
             st.dataframe(monthly_tbl.sort_values("month"), use_container_width=True, height=260)
 
-    # === Equity Curve ===
     st.markdown("### Equity Curve")
     if equity_df.empty:
         st.info("No equity curve.")
@@ -589,7 +570,6 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
                              xaxis_title="", yaxis_title="Cash ($)")
         st.plotly_chart(fig_eq, use_container_width=True)
 
-    # === Price Chart with Indicators ===
     st.markdown("### Price Chart with Indicators")
     fig_px = go.Figure()
     fig_px.add_trace(go.Scatter(x=df_out.index,y=df_out["vwap"],name="VWAP", mode="lines",line=dict(color="steelblue",width=2)))
@@ -643,7 +623,6 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
                          legend=dict(orientation="h",yanchor="bottom",y=1.02,xanchor="left",x=0))
     st.plotly_chart(fig_px, use_container_width=True)
 
-    # Trades box under chart
     st.markdown("### Trades")
     if trades_df.empty:
         st.info("No trades to display for the current file and timeframe.")
@@ -656,4 +635,3 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
             if dcol in trades_display.columns:
                 trades_display[dcol] = pd.to_datetime(trades_display[dcol]).dt.strftime("%Y-%m-%d %H:%M")
         st.dataframe(trades_display, use_container_width=True, height=360)
-``
