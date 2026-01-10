@@ -512,7 +512,7 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
     s2.metric("High P/L",  f"${high_pl:.2f}",  delta=f"{high_pl:+.2f}")
     s3.metric("Low P/L",   f"${low_pl:.2f}",   delta=f"{low_pl:+.2f}")
     s4.metric("Max Risk",  f"${max_risk:.2f}")
-    # === FIX: Drawdown shows $ value and % delta ===
+    # Drawdown shows $ value and % delta
     s5.metric("Max Drawdown", f"${max_dd_val:.2f}", delta=f"{-abs(max_dd_pct):.2f}%")
     s6.metric("Profit Factor", f"{profit_factor:.2f}" if not np.isnan(profit_factor) else "—")
 
@@ -546,27 +546,29 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
         st.session_state.show_rejected_panel = False
 
     filtered_count = int(len(rejected_df)) if not rejected_df.empty else 0
-    # === FIX: reliable toggle via session_state + stable button key ===
-    if st.button(
-        f"Filtered (rejected): {filtered_count}",
-        key="rejected_toggle_btn",
-        help="Click to open/close the rejected diagnostics panel",
-    ):
-        st.session_state.show_rejected_panel = not st.session_state.show_rejected_panel
 
-    if st.session_state.show_rejected_panel:
-        st.markdown("### Filtered Diagnostics")
+    # Place the toggle immediately above the panel to avoid scrolling to settings after rerun
+    st.markdown("#### Filtered (Rejected) Diagnostics")
+    st.checkbox(
+        f"Show rejected diagnostics ({filtered_count})",
+        key="show_rejected_panel",
+        help="Toggle to open/close the diagnostic panel for rejected evaluations."
+    )
+
+    # Bind expander to session_state so it reliably opens without jumping to settings
+    with st.expander("Rejected Diagnostics Panel", expanded=st.session_state.show_rejected_panel):
         st.caption(f"Total filtered (rejected) evaluations: {filtered_count}")
         if rejected_df.empty:
             st.info("No rejected evaluations to display.")
         else:
+            # Reason chips with counts (non-interactive)
             reasons_series = rejected_df["reasons"].str.split(", ").explode()
             counts = reasons_series.value_counts().reset_index()
             counts.columns = ["Reason", "Count"]
             chips = st.columns(min(6, len(counts)) or 1)
             for i, (_, row) in enumerate(counts.iterrows()):
-                # non-interactive chips to show counts
                 chips[i % len(chips)].button(f"{row['Reason']} • {row['Count']}", disabled=True)
+            # Scrollable list/table
             display_cols = ["date","reasons","adx","rsi","hv","blackout"]
             tbl = rejected_df.copy()
             tbl["date"] = pd.to_datetime(tbl["date"]).dt.strftime("%Y-%m-%d %H:%M")
