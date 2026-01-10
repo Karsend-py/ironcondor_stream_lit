@@ -1,6 +1,4 @@
 
-# streamlit_app.py
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -11,6 +9,7 @@ from typing import List
 st.set_page_config(page_title="Iron Condor Backtester", page_icon="📈", layout="wide")
 st.markdown("## 📈 Iron Condor Backtester")
 
+# ========================= Uploads =========================
 with st.container():
     st.subheader("Data Files")
     st.write("Upload the input CSV and blackout dates file to begin.")
@@ -21,6 +20,7 @@ with st.container():
 has_csv = uploaded_csv is not None
 has_txt = uploaded_txt is not None
 
+# Timeframe toggle
 if has_csv:
     timeframe_choice = st.radio(
         "Timeframe",
@@ -32,6 +32,7 @@ if has_csv:
 else:
     timeframe_choice = "Daily"
 
+# BB window from timeframe (constant ~20 trading days)
 def bb_window_from_timeframe(choice: str, base_days: int = 20) -> int:
     mapping = {
         "Daily":      base_days,
@@ -45,6 +46,7 @@ def bb_window_from_timeframe(choice: str, base_days: int = 20) -> int:
 
 bb_window = bb_window_from_timeframe(timeframe_choice)
 
+# ========================= Helpers (cached) =========================
 @st.cache_data(show_spinner=False)
 def parse_blackout_txt(file) -> List[pd.Timestamp]:
     if not file:
@@ -101,11 +103,14 @@ def resample_to_timeframe(df_raw: pd.DataFrame, choice: str) -> pd.DataFrame:
 @st.cache_data(show_spinner=False)
 def compute_indicators(df: pd.DataFrame, bb_window: int) -> pd.DataFrame:
     df = df.copy()
+    # Timeframe-aware Bollinger Bands on VWAP
     ma_vwap  = df["vwap"].rolling(bb_window, min_periods=bb_window).mean()
     std_vwap = df["vwap"].rolling(bb_window, min_periods=bb_window).std(ddof=0)
     df["bb_mid"]   = ma_vwap
     df["bb_upper"] = ma_vwap + 2.0 * std_vwap
     df["bb_lower"] = ma_vwap - 2.0 * std_vwap
+
+    # Other indicators (unchanged)
     delta = df["close"].diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
@@ -113,6 +118,7 @@ def compute_indicators(df: pd.DataFrame, bb_window: int) -> pd.DataFrame:
     avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
     rs = avg_gain / (avg_loss.replace(0, np.nan))
     df["rsi"] = (100 - (100 / (1 + rs))).bfill().ffill()
+
     up_move = df["high"].diff()
     down_move = df["low"].diff() * -1
     plus_dm = ((up_move > down_move) & (up_move > 0)) * up_move
@@ -125,6 +131,7 @@ def compute_indicators(df: pd.DataFrame, bb_window: int) -> pd.DataFrame:
     minus_di = 100 * (minus_dm.ewm(alpha=1/14, adjust=False).mean() / atr)
     dx = (abs(plus_di - minus_di) / (plus_di + minus_di).replace(0, np.nan)) * 100
     df["adx"] = dx.ewm(alpha=1/14, adjust=False).mean().bfill().ffill()
+
     df["vwap_sma20"] = df["vwap"].rolling(20).mean()
     df["plus_di"] = plus_di
     df["minus_di"] = minus_di
@@ -133,6 +140,7 @@ def compute_indicators(df: pd.DataFrame, bb_window: int) -> pd.DataFrame:
         (df["bb_width"] < df["bb_width"].shift(1)) &
         (df["bb_width"] < df["bb_width"].rolling(20, min_periods=5).median())
     ).fillna(False)
+
     log_ret = np.log(df["close"]).diff()
     df["hv"] = (log_ret.rolling(21).std(ddof=0) * np.sqrt(252) * 100).bfill().ffill()
     return df
@@ -153,6 +161,7 @@ def compute_trend_flags(df: pd.DataFrame, method: str) -> pd.DataFrame:
         df["trend_up"] = False; df["trend_down"] = False
     return df
 
+# ========================= Backtest (cached) =========================
 @st.cache_data(show_spinner=True)
 def run_backtest(
     df_raw: pd.DataFrame,
@@ -193,6 +202,7 @@ def run_backtest(
     combined = cond_adx & cond_rsi & cond_hv
     eligible = combined & (~mask_blackout.values)
 
+    # Collect diagnostics for rejected (evaluated but not taken)
     rejected = []
     for d, ok in zip(df.index, eligible.values):
         if not ok:
@@ -331,6 +341,7 @@ def run_backtest(
     win_rate = (100*wins/len(trades_df)) if not trades_df.empty else 0.0
     total_pnl = float(trades_df["pnl"].sum()) if not trades_df.empty else 0.0
 
+    # Max drawdown ($ and %) from equity curve
     if not equity_df.empty and not equity_df["cash"].empty:
         run_max = equity_df["cash"].cummax()
         dd = run_max - equity_df["cash"]
@@ -349,12 +360,13 @@ def run_backtest(
         "breaches": int(breaches), "adx_exits": int(adx_exits),
         "vwap_exits": int(vwap_exits), "brokes": int(brokes),
         "win_rate": float(win_rate), "total_pnl": total_pnl,
-        "max_drawdown": max_dd_val, "max_drawdown_pct": max_dd_pct
+        "max_drawdown": max_dd_val, "max_drawdown_pct": max_dd_pct,  # keep % for UI
     }
 
     rejected_df = pd.DataFrame(rejected)
     return df, trades_df, equity_df, summary, rejected_df
 
+# ========================= Configuration =========================
 if has_csv:
     with st.container():
         st.subheader("Configuration")
@@ -381,6 +393,7 @@ if has_csv:
 else:
     st.info("Upload a CSV to reveal configuration and the backtest button.")
 
+# ========================= Results =========================
 if has_csv and 'run_clicked' in locals() and run_clicked:
     if not uploaded_txt:
         st.error("Upload blackout .txt to proceed.")
@@ -397,9 +410,12 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
         st.info("No results yet. CSV is missing required columns. Showing basic price chart.")
         df_raw["timestamp"] = pd.to_datetime(df_raw.get("timestamp"), errors="coerce")
         df = df_raw.dropna(subset=["timestamp"]).sort_values("timestamp").set_index("timestamp")
+
+        # fallback BB uses timeframe-aware window
         ma = df["close"].rolling(bb_window, min_periods=bb_window).mean()
         ub = ma + 2 * df["close"].rolling(bb_window, min_periods=bb_window).std(ddof=0)
         lb = ma - 2 * df["close"].rolling(bb_window, min_periods=bb_window).std(ddof=0)
+
         st.markdown("### Equity Curve")
         st.info("No equity curve.")
         fig = go.Figure()
@@ -434,6 +450,7 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
             bb_window=bb_window,
         )
 
+    # ===== Top Stats (with Drawdown %) =====
     PER_LEG_FEE = 0.65
     MULT = 100.0
     if not trades_df.empty:
@@ -450,12 +467,9 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
     low_pl   = float(pnl_series.min()) if len(pnl_series)>0 else 0.0
     max_risk = float(max_risk_vec.max()) if len(max_risk_vec)>0 else 0.0
 
-    if not equity_df.empty and not equity_df["cash"].empty:
-        run_max = equity_df["cash"].cummax()
-        dd = run_max - equity_df["cash"]
-        max_dd_val = float(dd.max()) if not dd.empty else 0.0
-    else:
-        max_dd_val = 0.0
+    # $ and % drawdown
+    max_dd_val = summary.get("max_drawdown", 0.0)
+    max_dd_pct = summary.get("max_drawdown_pct", 0.0)
 
     wins_mask = trades_df["outcome"].eq("win") if not trades_df.empty else pd.Series([], dtype=bool)
     losses_mask = trades_df["outcome"].eq("loss") if not trades_df.empty else pd.Series([], dtype=bool)
@@ -498,7 +512,8 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
     s2.metric("High P/L",  f"${high_pl:.2f}",  delta=f"{high_pl:+.2f}")
     s3.metric("Low P/L",   f"${low_pl:.2f}",   delta=f"{low_pl:+.2f}")
     s4.metric("Max Risk",  f"${max_risk:.2f}")
-    s5.metric("Max Drawdown", f"${max_dd_val:.2f}", delta=f"{-abs(max_dd_val):+.2f}")
+    # === FIX: Drawdown shows $ value and % delta ===
+    s5.metric("Max Drawdown", f"${max_dd_val:.2f}", delta=f"{-abs(max_dd_pct):.2f}%")
     s6.metric("Profit Factor", f"{profit_factor:.2f}" if not np.isnan(profit_factor) else "—")
 
     st.markdown("#### Positions")
@@ -526,11 +541,17 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
     e4.metric("Breach", f"{breach_n}")
     e5.metric("Broke", f"{broke_n}")
 
+    # ===== Rejected (Filtered) Diagnostics Toggle =====
     if "show_rejected_panel" not in st.session_state:
         st.session_state.show_rejected_panel = False
+
     filtered_count = int(len(rejected_df)) if not rejected_df.empty else 0
-    diag_col = st.columns(1)[0]
-    if diag_col.button(f"Filtered (rejected): {filtered_count}", help="Click to open diagnostic panel"):
+    # === FIX: reliable toggle via session_state + stable button key ===
+    if st.button(
+        f"Filtered (rejected): {filtered_count}",
+        key="rejected_toggle_btn",
+        help="Click to open/close the rejected diagnostics panel",
+    ):
         st.session_state.show_rejected_panel = not st.session_state.show_rejected_panel
 
     if st.session_state.show_rejected_panel:
@@ -544,12 +565,14 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
             counts.columns = ["Reason", "Count"]
             chips = st.columns(min(6, len(counts)) or 1)
             for i, (_, row) in enumerate(counts.iterrows()):
+                # non-interactive chips to show counts
                 chips[i % len(chips)].button(f"{row['Reason']} • {row['Count']}", disabled=True)
             display_cols = ["date","reasons","adx","rsi","hv","blackout"]
             tbl = rejected_df.copy()
             tbl["date"] = pd.to_datetime(tbl["date"]).dt.strftime("%Y-%m-%d %H:%M")
             st.dataframe(tbl[display_cols].sort_values("date"), use_container_width=True, height=360)
 
+    # ===== Monthly P/L =====
     with st.expander("Monthly P/L", expanded=False):
         if trades_df.empty:
             st.info("No trades for monthly summary.")
@@ -559,6 +582,7 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
             monthly_tbl = mt.groupby("month", as_index=False)["pnl"].sum().rename(columns={"pnl":"monthly_pnl"})
             st.dataframe(monthly_tbl.sort_values("month"), use_container_width=True, height=260)
 
+    # ===== Equity Curve =====
     st.markdown("### Equity Curve")
     if equity_df.empty:
         st.info("No equity curve.")
@@ -570,6 +594,7 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
                              xaxis_title="", yaxis_title="Cash ($)")
         st.plotly_chart(fig_eq, use_container_width=True)
 
+    # ===== Price Chart with Indicators =====
     st.markdown("### Price Chart with Indicators")
     fig_px = go.Figure()
     fig_px.add_trace(go.Scatter(x=df_out.index,y=df_out["vwap"],name="VWAP", mode="lines",line=dict(color="steelblue",width=2)))
@@ -623,6 +648,7 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
                          legend=dict(orientation="h",yanchor="bottom",y=1.02,xanchor="left",x=0))
     st.plotly_chart(fig_px, use_container_width=True)
 
+    # ===== Trades box =====
     st.markdown("### Trades")
     if trades_df.empty:
         st.info("No trades to display for the current file and timeframe.")
