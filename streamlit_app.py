@@ -1,4 +1,6 @@
 
+# streamlit_app.py
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -6,17 +8,10 @@ import plotly.graph_objects as go
 from datetime import timedelta
 from typing import List
 
-# ------------------------------------------------------------------------------------------
-# FAST BOOT
-# ------------------------------------------------------------------------------------------
 st.set_page_config(page_title="Iron Condor Backtester", page_icon="📈", layout="wide")
-
-# Minimal header
 st.markdown("## 📈 Iron Condor Backtester")
 
-# ------------------------------------------------------------------------------------------
-# === Single-page layout: File Upload first ===
-# ------------------------------------------------------------------------------------------
+# Uploads
 with st.container():
     st.subheader("Data Files")
     st.write("Upload the input CSV and blackout dates file to begin.")
@@ -27,7 +22,7 @@ with st.container():
 has_csv = uploaded_csv is not None
 has_txt = uploaded_txt is not None
 
-# === NEW: Timeframe toggle under file upload ===
+# Timeframe toggle
 if has_csv:
     timeframe_choice = st.radio(
         "Timeframe",
@@ -37,29 +32,23 @@ if has_csv:
         help="Resample the uploaded data to this frequency before indicators/backtest."
     )
 else:
-    timeframe_choice = "Daily"  # default until CSV is uploaded
+    timeframe_choice = "Daily"
 
-# === NEW: Timeframe-aware Bollinger Band window ===
+# Timeframe-aware BB window
 def bb_window_from_timeframe(choice: str, base_days: int = 20) -> int:
-    """
-    Return number of bars that represent ~base_days trading days for the selected timeframe.
-    1 trading day ≈ 390 minutes; 1 hour ≈ 60 minutes.
-    """
     mapping = {
-        "Daily":      base_days,               # 20 bars
-        "Hourly":     int(base_days * 6.5),    # 20 * 6.5 = 130
-        "30-minute":  int(base_days * 13),     # 20 * 13  = 260
-        "15-minute":  int(base_days * 26),     # 20 * 26  = 520
-        "5-minute":   int(base_days * 78),     # 20 * 78  = 1,560
-        "1-minute":   int(base_days * 390),    # 20 * 390 = 7,800
+        "Daily":      base_days,
+        "Hourly":     int(base_days * 6.5),
+        "30-minute":  int(base_days * 13),
+        "15-minute":  int(base_days * 26),
+        "5-minute":   int(base_days * 78),
+        "1-minute":   int(base_days * 390),
     }
     return mapping.get(choice, base_days)
 
 bb_window = bb_window_from_timeframe(timeframe_choice)
 
-# ------------------------------------------------------------------------------------------
-# Helpers (cached) — unchanged, except BB uses dynamic window inside compute_indicators
-# ------------------------------------------------------------------------------------------
+# Helpers (cached)
 @st.cache_data(show_spinner=False)
 def parse_blackout_txt(file) -> List[pd.Timestamp]:
     if not file:
@@ -86,7 +75,6 @@ def load_csv(file) -> pd.DataFrame:
     df.columns = [c.lower() for c in df.columns]
     return df
 
-# Timeframe resampling helper
 def _freq_from_choice(choice: str) -> str:
     return {
         "Daily": "D",
@@ -98,7 +86,6 @@ def _freq_from_choice(choice: str) -> str:
     }.get(choice, "D")
 
 def resample_to_timeframe(df_raw: pd.DataFrame, choice: str) -> pd.DataFrame:
-    """Resample required columns to the selected timeframe, preserving lower-case column names."""
     if df_raw.empty or "timestamp" not in df_raw.columns:
         return df_raw
     freq = _freq_from_choice(choice)
@@ -110,27 +97,19 @@ def resample_to_timeframe(df_raw: pd.DataFrame, choice: str) -> pd.DataFrame:
     if "high" in df.columns:   agg["high"]  = "max"
     if "low" in df.columns:    agg["low"]   = "min"
     if "close" in df.columns:  agg["close"] = "last"
-    if "vwap" in df.columns:   agg["vwap"]  = "mean"  # simple mean if no volume
+    if "vwap" in df.columns:   agg["vwap"]  = "mean"
     df_res = df.resample(freq).agg(agg)
     df_res = df_res.dropna(how="any")
-    return df_res.reset_index()  # keep "timestamp" for downstream code
+    return df_res.reset_index()
 
 @st.cache_data(show_spinner=False)
 def compute_indicators(df: pd.DataFrame, bb_window: int) -> pd.DataFrame:
-    """
-    Compute indicators; Bollinger Bands use a dynamic window tied to the selected timeframe.
-    Other indicators remain unchanged to preserve backtest behavior.
-    """
     df = df.copy()
-
-    # --- Bollinger Bands on VWAP with timeframe-aware window ---
     ma_vwap  = df["vwap"].rolling(bb_window, min_periods=bb_window).mean()
     std_vwap = df["vwap"].rolling(bb_window, min_periods=bb_window).std(ddof=0)
     df["bb_mid"]   = ma_vwap
     df["bb_upper"] = ma_vwap + 2.0 * std_vwap
     df["bb_lower"] = ma_vwap - 2.0 * std_vwap
-
-    # --- Existing indicators (unchanged) ---
     delta = df["close"].diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
@@ -138,7 +117,6 @@ def compute_indicators(df: pd.DataFrame, bb_window: int) -> pd.DataFrame:
     avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
     rs = avg_gain / (avg_loss.replace(0, np.nan))
     df["rsi"] = (100 - (100 / (1 + rs))).bfill().ffill()
-
     up_move = df["high"].diff()
     down_move = df["low"].diff() * -1
     plus_dm = ((up_move > down_move) & (up_move > 0)) * up_move
@@ -151,10 +129,7 @@ def compute_indicators(df: pd.DataFrame, bb_window: int) -> pd.DataFrame:
     minus_di = 100 * (minus_dm.ewm(alpha=1/14, adjust=False).mean() / atr)
     dx = (abs(plus_di - minus_di) / (plus_di + minus_di).replace(0, np.nan)) * 100
     df["adx"] = dx.ewm(alpha=1/14, adjust=False).mean().bfill().ffill()
-
-    # Keep existing SMA20 for "VWAP vs SMA20" trend method (non-goal to modify other indicators)
     df["vwap_sma20"] = df["vwap"].rolling(20).mean()
-
     df["plus_di"] = plus_di
     df["minus_di"] = minus_di
     df["bb_width"] = df["bb_upper"] - df["bb_lower"]
@@ -162,7 +137,6 @@ def compute_indicators(df: pd.DataFrame, bb_window: int) -> pd.DataFrame:
         (df["bb_width"] < df["bb_width"].shift(1)) &
         (df["bb_width"] < df["bb_width"].rolling(20, min_periods=5).median())
     ).fillna(False)
-
     log_ret = np.log(df["close"]).diff()
     df["hv"] = (log_ret.rolling(21).std(ddof=0) * np.sqrt(252) * 100).bfill().ffill()
     return df
@@ -183,7 +157,7 @@ def compute_trend_flags(df: pd.DataFrame, method: str) -> pd.DataFrame:
         df["trend_up"] = False; df["trend_down"] = False
     return df
 
-# -------------------------------- FULL BACKTEST (cached) -----------------------------------
+# Backtest (cached) — unchanged trade logic; adds rejected logging
 @st.cache_data(show_spinner=True)
 def run_backtest(
     df_raw: pd.DataFrame,
@@ -198,20 +172,17 @@ def run_backtest(
     wing_ext_pct: float,
     days_before: int,
     days_after: int,
-    bb_window: int,   # pass timeframe-aware BB window
+    bb_window: int,
 ):
     df = df_raw.copy()
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df = df.sort_values("timestamp").set_index("timestamp")
-
-    # Indicators with timeframe-aware Bollinger window
     df = compute_indicators(df, bb_window=bb_window)
     df = compute_trend_flags(df, trend_method)
 
     cond_adx = df["adx"] < 20
     cond_rsi = (df["rsi"] >= 40) & (df["rsi"] <= 60)
     cond_hv = (df["hv"] >= hv_min) & (df["hv"] <= hv_max)
-    combined = cond_adx & cond_rsi & cond_hv
 
     def in_blackout(day):
         day_n = pd.Timestamp(day).normalize()
@@ -224,12 +195,29 @@ def run_backtest(
         return False
 
     mask_blackout = df.index.to_series().apply(in_blackout)
+    combined = cond_adx & cond_rsi & cond_hv
     eligible = combined & (~mask_blackout.values)
 
-    per_leg_fee = 0.65; mult = 100
-    def round_to(x, step=1.0):
-        return float(np.round(x / step) * step)
+    # Collect diagnostics for rejected (evaluated but not taken)
+    rejected = []
+    for d, ok in zip(df.index, eligible.values):
+        if not ok:
+            reasons = []
+            if not cond_hv.loc[d]:  reasons.append("HV outside range")
+            if not cond_adx.loc[d]: reasons.append("ADX too high")
+            if not cond_rsi.loc[d]: reasons.append("RSI out of range")
+            if mask_blackout.loc[d]: reasons.append("Blackout window")
+            rejected.append({
+                "date": d,
+                "reasons": ", ".join(reasons) if reasons else "Not eligible",
+                "adx": float(df.loc[d, "adx"]),
+                "rsi": float(df.loc[d, "rsi"]),
+                "hv":  float(df.loc[d, "hv"]),
+                "blackout": bool(mask_blackout.loc[d]),
+            })
 
+    per_leg_fee = 0.65; mult = 100
+    def round_to(x, step=1.0): return float(np.round(x / step) * step)
     def eval_condor(exp_close, sp, lp, sc, lc, credit):
         put_w = sp - lp; call_w = lc - sc
         if sp <= exp_close <= sc:
@@ -250,7 +238,6 @@ def run_backtest(
                 pnl_today, _ = eval_condor(cur, pos["sp"], pos["lp"], pos["sc"], pos["lc"], pos["credit"])
                 breach = (cur < pos["sp"]) or (cur > pos["sc"])
                 broke  = (cur < pos["lp"]) or (cur > pos["lc"])
-
                 adx_out = df.loc[d,"adx"] >= int(adx_exit_thr)
                 vwap_today = df.loc[d,"vwap"]; vwap_prev = df.iloc[i-1]["vwap"] if i>0 else vwap_today
                 delta_today = vwap_today - vwap_prev
@@ -261,17 +248,11 @@ def run_backtest(
                 away_enough = abs(cur - vwap_today) >= accept_dist
                 on_slope = ((delta_today > 0 and cur > vwap_today) or (delta_today < 0 and cur < vwap_today))
                 vwap_exit = slope_flip and away_enough and on_slope
-
                 exited = False; flag=None
-                if (d < pos["expiry"]) and broke:
-                    exited=True; flag="broke"
-                elif (d < pos["expiry"]) and breach:
-                    exited=True; flag="breach"
-                elif (d < pos["expiry"]) and adx_out:
-                    exited=True; flag="adx_exit"
-                elif (d < pos["expiry"]) and vwap_exit:
-                    exited=True; flag="vwap_exit"
-
+                if (d < pos["expiry"]) and broke:        exited=True; flag="broke"
+                elif (d < pos["expiry"]) and breach:     exited=True; flag="breach"
+                elif (d < pos["expiry"]) and adx_out:    exited=True; flag="adx_exit"
+                elif (d < pos["expiry"]) and vwap_exit:  exited=True; flag="vwap_exit"
                 if exited:
                     cash += pnl_today
                     trades.append({
@@ -323,24 +304,19 @@ def run_backtest(
             prev_up = bool(df["trend_up"].iloc[i-1]) if i>0 else False
             prev_dn = bool(df["trend_down"].iloc[i-1]) if i>0 else False
             tightening = bool(df["bb_tightening"].iloc[i])
-
             ext = 1.0 + max(0.0, float(wing_ext_pct))/100.0
             put_w  = 5.0 * ext if (df["trend_up"].iloc[i] and prev_dn and tightening) else 5.0
             call_w = 5.0 * ext if (df["trend_down"].iloc[i] and prev_up and tightening) else 5.0
-
             lp = round_to(sp - put_w, 1.0)
             lc = round_to(sc + call_w, 1.0)
             credit = 0.30 * min(call_w, put_w)
 
-            # find next Friday (≤ 5 DTE)
             end = min(i+5, len(idx)-1)
             expiry = None
             for j in range(i, end+1):
                 if idx[j].weekday() == 4:
                     expiry = idx[j]; break
-            if expiry is None:
-                expiry = idx[end]
-
+            if expiry is None: expiry = idx[end]
             open_positions.append({
                 "entry": d, "expiry": expiry,
                 "sp": sp, "lp": lp, "sc": sc, "lc": lc, "credit": credit
@@ -349,32 +325,26 @@ def run_backtest(
         eq.append({"date": d, "cash": cash})
 
     trades_df = pd.DataFrame(trades)
-    if not trades_df.empty:
-        trades_df["cum_pnl"] = trades_df["pnl"].cumsum()
-
+    if not trades_df.empty: trades_df["cum_pnl"] = trades_df["pnl"].cumsum()
     equity_df = pd.DataFrame(eq).set_index("date") if eq else pd.DataFrame(columns=["cash"])
 
-    # summary (unchanged)
     wins     = (trades_df["outcome"]=="win").sum()     if not trades_df.empty else 0
     losses   = (trades_df["outcome"]=="loss").sum()    if not trades_df.empty else 0
     breaches = (trades_df["outcome"]=="breach").sum()  if not trades_df.empty else 0
     adx_exits= (trades_df["outcome"]=="adx_exit").sum()if not trades_df.empty else 0
     vwap_exits=(trades_df["outcome"]=="vwap_exit").sum()if not trades_df.empty else 0
     brokes   = (trades_df["outcome"]=="broke").sum()   if not trades_df.empty else 0
-
     win_rate = (100*wins/len(trades_df)) if not trades_df.empty else 0.0
     total_pnl = float(trades_df["pnl"].sum()) if not trades_df.empty else 0.0
 
-    # max drawdown (unchanged)
     if not equity_df.empty and not equity_df["cash"].empty:
         run_max = equity_df["cash"].cummax()
         dd = run_max - equity_df["cash"]
         max_dd_val = float(dd.max()) if not dd.empty else 0.0
-        if max_dd_val > 0:
+        if max_dd_val>0:
             dd_idx = dd.idxmax()
             max_dd_pct = (max_dd_val/run_max.loc[dd_idx])*100 if run_max.loc[dd_idx]!=0 else 0.0
-        else:
-            max_dd_pct = 0.0
+        else: max_dd_pct = 0.0
     else:
         max_dd_val = 0.0; max_dd_pct = 0.0
 
@@ -386,16 +356,15 @@ def run_backtest(
         "win_rate": float(win_rate), "total_pnl": total_pnl,
         "max_drawdown": max_dd_val, "max_drawdown_pct": max_dd_pct
     }
-    return df, trades_df, equity_df, summary
 
-# ------------------------------------------------------------------------------------------
-# 2) Configuration (only shown after CSV upload)
-# ------------------------------------------------------------------------------------------
+    rejected_df = pd.DataFrame(rejected)
+    return df, trades_df, equity_df, summary, rejected_df
+
+# Configuration
 if has_csv:
     with st.container():
         st.subheader("Configuration")
         left, right = st.columns(2)
-
         with left:
             st.markdown("**Backtest Parameters**")
             days_before = st.number_input("Days Before Earnings", value=7)
@@ -404,7 +373,6 @@ if has_csv:
             vwap_accept_k = st.number_input("VWAP Exit Distance (k)", value=1.0)
             hv_min      = st.number_input("Min Historical Vol (%)", value=15.0)
             hv_max      = st.number_input("Max Historical Vol (%)", value=40.0)
-
         with right:
             st.markdown("**Trend Bias Settings**")
             use_trend_bias = st.checkbox("Enable Trend Bias")
@@ -419,34 +387,26 @@ if has_csv:
 else:
     st.info("Upload a CSV to reveal configuration and the backtest button.")
 
-# ------------------------------------------------------------------------------------------
-# 3) Summary + Charts (after run)
-# ------------------------------------------------------------------------------------------
+# Results
 if has_csv and 'run_clicked' in locals() and run_clicked:
     if not uploaded_txt:
         st.error("Upload blackout .txt to proceed.")
         st.stop()
 
-    # Load + resample to selected timeframe BEFORE running the backtest
     df_raw_original = load_csv(uploaded_csv)
     df_raw = resample_to_timeframe(df_raw_original, timeframe_choice)
-
     required = {"timestamp","close","high","low","vwap"}
     missing = required - set(df_raw.columns)
     blackout_dates = parse_blackout_txt(uploaded_txt)
 
-    # Fallback chart if CSV lacks required columns for full logic
     if missing:
         st.markdown("### Summary")
         st.info("No results yet. CSV is missing required columns. Showing basic price chart.")
         df_raw["timestamp"] = pd.to_datetime(df_raw.get("timestamp"), errors="coerce")
         df = df_raw.dropna(subset=["timestamp"]).sort_values("timestamp").set_index("timestamp")
-
-        # Fallback BB also uses timeframe-aware window for visual consistency
         ma = df["close"].rolling(bb_window, min_periods=bb_window).mean()
         ub = ma + 2 * df["close"].rolling(bb_window, min_periods=bb_window).std(ddof=0)
         lb = ma - 2 * df["close"].rolling(bb_window, min_periods=bb_window).std(ddof=0)
-
         st.markdown("### Equity Curve")
         st.info("No equity curve.")
         fig = go.Figure()
@@ -454,13 +414,11 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
         fig.add_trace(go.Scatter(x=df.index,y=ma,name="BB Mid (timeframe-aware)",mode="lines",line=dict(color="gray",width=1.2)))
         fig.add_trace(go.Scatter(x=df.index,y=ub,name="BB Upper",mode="lines",line=dict(color="orange",width=1.2)))
         fig.add_trace(go.Scatter(x=df.index,y=lb,name="BB Lower",mode="lines",line=dict(color="orange",width=1.2)))
-
         if blackout_dates and len(df)>0:
             for e in blackout_dates:
                 start = e - timedelta(days=int(days_before))
                 end   = e + timedelta(days=int(days_after))
                 fig.add_vrect(x0=start,x1=end,fillcolor="red",opacity=0.08,line_width=0)
-
         fig.update_layout(template="plotly_dark",margin=dict(l=10,r=10,t=40,b=10),
                           xaxis_title="",yaxis_title="Price ($)",
                           legend=dict(orientation="h",y=1.02))
@@ -468,9 +426,8 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
         st.plotly_chart(fig, use_container_width=True)
         st.stop()
 
-    # Full backtest on resampled data with timeframe-aware Bollinger window
     with st.spinner("Running backtest…"):
-        df_out, trades_df, equity_df, summary = run_backtest(
+        df_out, trades_df, equity_df, summary, rejected_df = run_backtest(
             df_raw=df_raw,
             blackout_dates=blackout_dates,
             hv_min=hv_min, hv_max=hv_max,
@@ -484,45 +441,155 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
             bb_window=bb_window,
         )
 
-    # Metrics box (unchanged)
-    st.markdown("### Summary")
-    with st.container():
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Trades Taken", f"{summary['trades']}")
-        c2.metric("P&L",          f"${summary['total_pnl']:.2f}")
-        c3.metric("Wins",         f"{summary['wins']}")
-        c4.metric("Losses",       f"{summary['losses']}")
-        c5, c6, c7, c8 = st.columns(4)
-        c5.metric("Breach",       f"{summary['breaches']}")
-        c6.metric("Broke",        f"{summary['brokes']}")
-        c7.metric("Drawdown",     f"${summary['max_drawdown']:.2f}")
-        c8.metric("Drawdown %",   f"{summary['max_drawdown_pct']:.2f}%")
+    # === Top Stats Section (Option Alpha–style) ===
+    # compute risk vectorized from executed trades
+    PER_LEG_FEE = 0.65
+    MULT = 100.0
+    if not trades_df.empty:
+        put_w  = trades_df["short_put"] - trades_df["long_put"]
+        call_w = trades_df["long_call"] - trades_df["short_call"]
+        width  = np.minimum(put_w, call_w)
+        max_risk_vec = (width - trades_df["net_credit"]) * MULT + 4 * PER_LEG_FEE
+    else:
+        max_risk_vec = pd.Series([], dtype=float)
 
-    # === Equity Curve (with Plotly update_layout fix) ===
+    pnl_series = trades_df["pnl"] if not trades_df.empty else pd.Series([], dtype=float)
+    total_pl = float(pnl_series.sum()) if len(pnl_series)>0 else 0.0
+    high_pl  = float(pnl_series.max()) if len(pnl_series)>0 else 0.0
+    low_pl   = float(pnl_series.min()) if len(pnl_series)>0 else 0.0
+    max_risk = float(max_risk_vec.max()) if len(max_risk_vec)>0 else 0.0
+
+    if not equity_df.empty and not equity_df["cash"].empty:
+        run_max = equity_df["cash"].cummax()
+        dd = run_max - equity_df["cash"]
+        max_dd_val = float(dd.max()) if not dd.empty else 0.0
+    else:
+        max_dd_val = 0.0
+
+    wins_mask = trades_df["outcome"].eq("win") if not trades_df.empty else pd.Series([], dtype=bool)
+    losses_mask = trades_df["outcome"].eq("loss") if not trades_df.empty else pd.Series([], dtype=bool)
+    win_sum = float(pnl_series[wins_mask].clip(lower=0).sum()) if len(pnl_series)>0 else 0.0
+    loss_sum = float(pnl_series[losses_mask].clip(upper=0).sum()) if len(pnl_series)>0 else 0.0
+    profit_factor = float(win_sum / abs(loss_sum)) if loss_sum < 0 else np.nan
+
+    count = int(len(trades_df))
+    wins_n = int(wins_mask.sum()) if count>0 else 0
+    losses_n = int(losses_mask.sum()) if count>0 else 0
+    win_rate = (100.0 * wins_n / count) if count>0 else 0.0
+    best_win = float(pnl_series[wins_mask].max()) if wins_n>0 else 0.0
+    worst_loss = float(pnl_series[losses_mask].min()) if losses_n>0 else 0.0
+
+    def longest_streak(mask_bool):
+        longest = cur = 0
+        for v in mask_bool.tolist():
+            if v: cur += 1
+            else: cur = 0
+            longest = max(longest, cur)
+        return longest
+    win_streak = longest_streak(wins_mask) if count>0 else 0
+    loss_streak = longest_streak(losses_mask) if count>0 else 0
+
+    avg_pl = float(pnl_series.mean()) if len(pnl_series)>0 else 0.0
+    avg_risk = float(max_risk_vec.mean()) if len(max_risk_vec)>0 else 0.0
+    ret_on_risk = (total_pl / float(max_risk_vec.sum()) * 100.0) if len(max_risk_vec)>0 and max_risk_vec.sum() > 0 else 0.0
+    avg_win = float(pnl_series[wins_mask].mean()) if wins_n>0 else np.nan
+    avg_loss = abs(float(pnl_series[losses_mask].mean())) if losses_n>0 else np.nan
+    reward_risk = float(avg_win / avg_loss) if (wins_n>0 and losses_n>0 and avg_loss>0) else np.nan
+
+    expired_n = wins_n + losses_n
+    breach_n  = int(trades_df["outcome"].eq("breach").sum()) if count>0 else 0
+    broke_n   = int(trades_df["outcome"].eq("broke").sum())  if count>0 else 0
+
+    # Grid: Stats
+    st.markdown("### Summary")
+    st.markdown("#### Stats")
+    s1, s2, s3, s4, s5, s6 = st.columns(6)
+    s1.metric("Total P/L", f"${total_pl:.2f}", delta=f"{total_pl:+.2f}")
+    s2.metric("High P/L",  f"${high_pl:.2f}",  delta=f"{high_pl:+.2f}")
+    s3.metric("Low P/L",   f"${low_pl:.2f}",   delta=f"{low_pl:+.2f}")
+    s4.metric("Max Risk",  f"${max_risk:.2f}")
+    s5.metric("Max Drawdown", f"${max_dd_val:.2f}", delta=f"{-abs(max_dd_val):+.2f}")
+    s6.metric("Profit Factor", f"{profit_factor:.2f}" if not np.isnan(profit_factor) else "—")
+
+    # Grid: Positions
+    st.markdown("#### Positions")
+    p1, p2, p3, p4, p5, p6 = st.columns(6)
+    p1.metric("Count", f"{count}")
+    p2.metric("Win Rate", f"{win_rate:.2f}%")
+    p3.metric("Win / Loss", f"{wins_n}/{losses_n}")
+    p4.metric("Best Win", f"${best_win:.2f}", delta=f"{best_win:+.2f}")
+    p5.metric("Worst Loss", f"${worst_loss:.2f}", delta=f"{worst_loss:+.2f}")
+    p6.metric("Win Streak", f"{win_streak}")
+
+    # Grid: Averages
+    st.markdown("#### Averages")
+    a1, a2, a3, a4, a5 = st.columns(5)
+    a1.metric("Avg P/L", f"${avg_pl:.2f}", delta=f"{avg_pl:+.2f}")
+    a2.metric("Avg Risk", f"${avg_risk:.2f}")
+    a3.metric("Return on Risk", f"{ret_on_risk:.2f}%")
+    a4.metric("Reward / Risk", f"{reward_risk:.2f}" if not np.isnan(reward_risk) else "—")
+    a5.metric("Loss Streak", f"{loss_streak}")
+
+    # Grid: Exits
+    st.markdown("#### Exits")
+    e1, e2, e3, e4, e5 = st.columns(5)
+    e1.metric("Wins", f"{wins_n}")
+    e2.metric("Losses", f"{losses_n}")
+    e3.metric("Expired", f"{expired_n}")
+    e4.metric("Breach", f"{breach_n}")
+    e5.metric("Broke", f"{broke_n}")
+
+    # === Filtered (Rejected Trades) Diagnostic ===
+    if "show_rejected_panel" not in st.session_state:
+        st.session_state.show_rejected_panel = False
+
+    filtered_count = int(len(rejected_df)) if not rejected_df.empty else 0
+    diag_col = st.columns(1)[0]
+    if diag_col.button(f"Filtered (rejected): {filtered_count}", help="Click to open diagnostic panel"):
+        st.session_state.show_rejected_panel = not st.session_state.show_rejected_panel
+
+    if st.session_state.show_rejected_panel:
+        st.markdown("### Filtered Diagnostics")
+        st.caption(f"Total filtered (rejected) evaluations: {filtered_count}")
+        if rejected_df.empty:
+            st.info("No rejected evaluations to display.")
+        else:
+            # reason chips with counts (non-interactive)
+            reasons_series = rejected_df["reasons"].str.split(", ").explode()
+            counts = reasons_series.value_counts().reset_index()
+            counts.columns = ["Reason", "Count"]
+            chips_row = st.columns(min(6, len(counts)) or 1)
+            for i, (_, row) in enumerate(counts.iterrows()):
+                chips_row[i % len(chips_row)].button(f"{row['Reason']} • {row['Count']}", disabled=True)
+            # scrollable list/table
+            display_cols = ["date","reasons","adx","rsi","hv","blackout"]
+            tbl = rejected_df.copy()
+            tbl["date"] = pd.to_datetime(tbl["date"]).dt.strftime("%Y-%m-%d %H:%M")
+            st.dataframe(tbl[display_cols].sort_values("date"), use_container_width=True, height=360)
+
+    # === Monthly P/L (collapsible, table only) ===
+    with st.expander("Monthly P/L", expanded=False):
+        if trades_df.empty:
+            st.info("No trades for monthly summary.")
+        else:
+            mt = trades_df.copy()
+            mt["month"] = pd.to_datetime(mt["expiry_date"]).dt.to_period("M").astype(str)
+            monthly_tbl = mt.groupby("month", as_index=False)["pnl"].sum().rename(columns={"pnl":"monthly_pnl"})
+            st.dataframe(monthly_tbl.sort_values("month"), use_container_width=True, height=260)
+
+    # === Equity Curve ===
     st.markdown("### Equity Curve")
     if equity_df.empty:
         st.info("No equity curve.")
     else:
         fig_eq = go.Figure()
-        fig_eq.add_trace(
-            go.Scatter(
-                x=equity_df.index,
-                y=equity_df["cash"],
-                name="Equity",
-                mode="lines",
-                line=dict(color="#22D3EE", width=3),
-            )
-        )
-        # === FIX: correct method name (no backslash)
-        fig_eq.update_layout(
-            template="plotly_dark",
-            margin=dict(l=10, r=10, t=40, b=10),
-            xaxis_title="",
-            yaxis_title="Cash ($)",
-        )
+        fig_eq.add_trace(go.Scatter(x=equity_df.index, y=equity_df["cash"], name="Equity",
+                                    mode="lines", line=dict(color="#22D3EE", width=3)))
+        fig_eq.update_layout(template="plotly_dark", margin=dict(l=10, r=10, t=40, b=10),
+                             xaxis_title="", yaxis_title="Cash ($)")
         st.plotly_chart(fig_eq, use_container_width=True)
 
-    # Price Chart with Indicators (unchanged)
+    # === Price Chart with Indicators ===
     st.markdown("### Price Chart with Indicators")
     fig_px = go.Figure()
     fig_px.add_trace(go.Scatter(x=df_out.index,y=df_out["vwap"],name="VWAP", mode="lines",line=dict(color="steelblue",width=2)))
@@ -576,19 +643,17 @@ if has_csv and 'run_clicked' in locals() and run_clicked:
                          legend=dict(orientation="h",yanchor="bottom",y=1.02,xanchor="left",x=0))
     st.plotly_chart(fig_px, use_container_width=True)
 
-    # === RESTORED: Trades box under price chart ===
+    # Trades box under chart
     st.markdown("### Trades")
     if trades_df.empty:
         st.info("No trades to display for the current file and timeframe.")
     else:
         trades_display = trades_df.copy()
-        # Format numeric columns if present
         for col in ["short_put","long_put","short_call","long_call","net_credit","expiry_close","pnl"]:
             if col in trades_display.columns:
                 trades_display[col] = trades_display[col].map(lambda x: f"{x:.2f}" if pd.notnull(x) else x)
-        # Format dates
         for dcol in ["entry_date","expiry_date"]:
             if dcol in trades_display.columns:
                 trades_display[dcol] = pd.to_datetime(trades_display[dcol]).dt.strftime("%Y-%m-%d %H:%M")
-        # Scrollable table under the chart
-        st.dataframe(trades_display, use_container_width=True, height=320)
+        st.dataframe(trades_display, use_container_width=True, height=360)
+``
