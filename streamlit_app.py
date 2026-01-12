@@ -192,9 +192,7 @@ def _vectorized_blackout_mask(index_ts: pd.Index, blackout_dates: List[pd.Timest
         e = pd.Timestamp(e).normalize()
         before_start = e - timedelta(days=days_before)
         after_end = e + timedelta(days=days_after)
-        # Union of [e - days_before, e] and [e, e + days_after] equals [e - days_before, e + days_after]
         rng = (idx_norm >= before_start) & (idx_norm <= after_end)
-        # Keep as union to match original inclusive logic
         mask |= rng
     return mask
 
@@ -219,7 +217,7 @@ def run_backtest(
     # --- Precompute indicators once ---
     df = df_raw.copy()
     df["timestamp"] = pd.to_datetime(df["timestamp"])
-    df = df.sort_values("timestamp").set_index("timestamp")
+    df = df.dropna(subset=["timestamp"]).sort_values("timestamp").set_index("timestamp")
     df = compute_indicators(df, bb_window=bb_window)
     df = compute_trend_flags(df, trend_method)
 
@@ -246,13 +244,11 @@ def run_backtest(
     cond_adx = adx < 20
     cond_rsi = (rsi >= 40) & (rsi <= 60)
     cond_hv = (hv >= hv_min) & (hv <= hv_max)
-
     mask_blackout = _vectorized_blackout_mask(df.index, blackout_dates, days_before, days_after)
     eligible = cond_adx & cond_rsi & cond_hv & (~mask_blackout)
 
     # Collect diagnostics for rejected (evaluated but not taken)
     rejected = []
-    # Build reasons list only for non-eligible points; integer indexing with arrays
     not_eligible_idx = np.where(~eligible)[0]
     for ii in not_eligible_idx:
         reasons = []
@@ -284,10 +280,11 @@ def run_backtest(
         return -(loss_w - credit) * mult - 4 * per_leg_fee, "loss"
 
     n = len(idx_ts)
-    open_positions = []  # store dicts with integer indices/values
+    open_positions = []
     trades = []
     cash = 0.0
-    eq = []
+    eq = []  # equity points per bar (date, cash)
+    run_peak = 0.0  # running peak equity to compute drawdown inline (optional)
 
     # Progress control
     if progress is not None:
@@ -303,7 +300,6 @@ def run_backtest(
             adx_out = adx[i] >= int(adx_exit_thr)
 
             # VWAP exit precomputations (integer-only)
-            # delta_today and delta_prev from vwap series
             delta_today = vwap[i] - (vwap[i-1] if i > 0 else vwap[i])
             delta_prev = (vwap[i-1] - vwap[i-2]) if i > 1 else 0.0
             sign_today = np.sign(delta_today)
@@ -405,8 +401,8 @@ def run_backtest(
                 "sp": sp, "lp": lp, "sc": sc, "lc": lc, "credit": credit
             })
 
-        # Equity curve point each step (no slicing)
-        eq.append({"date": idx_ts[i], "cash": cash})
+        # Equity curve point each step (no slicing / no plotting here)
+        eq.append({"date": idx_ts[i], "cash": float(cash)})
 
         # Update progress (non-blocking UI, integer increments)
         if progress is not None and (i % update_every == 0 or i == n - 1):
@@ -420,7 +416,29 @@ def run_backtest(
 
     equity_df = pd.DataFrame(eq).set_index("date") if eq else pd.DataFrame(columns=["cash"])
 
-    # Summary metrics (unchanged logic)
+    # ---- Drawdown series from running peak (per bar) ----
+    if not equity_df.empty and "cash" in equity_df.columns:
+        equity_df["cash"] = pd.to_numeric(equity_df["cash"], errors="coerce").fillna(0.0)
+        equity_df["run_max"] = equity_df["cash"].cummax()
+        equity_df["drawdown"] = equity_df["run_max"] - equity_df["cash"]
+        equity_df["drawdown_pct"] = np.where(
+            equity_df["run_max"] != 0.0,
+            (equity_df["drawdown"] / equity_df["run_max"]) * 100.0,
+            0.0
+        )
+        # Summary metrics derived from the equity drawdown series
+        max_dd_val = float(equity_df["drawdown"].max()) if not equity_df["drawdown"].empty else 0.0
+        if max_dd_val > 0:
+            dd_idx = equity_df["drawdown"].idxmax()
+            run_max_at_dd = float(equity_df.loc[dd_idx, "run_max"]) if dd_idx in equity_df.index else 0.0
+            max_dd_pct = (max_dd_val / run_max_at_dd) * 100.0 if run_max_at_dd != 0.0 else 0.0
+        else:
+            max_dd_pct = 0.0
+    else:
+        max_dd_val = 0.0
+        max_dd_pct = 0.0
+
+    # Summary (counts and totals unchanged)
     wins = (trades_df["outcome"] == "win").sum() if not trades_df.empty else 0
     losses = (trades_df["outcome"] == "loss").sum() if not trades_df.empty else 0
     breaches = (trades_df["outcome"] == "breach").sum() if not trades_df.empty else 0
@@ -430,26 +448,14 @@ def run_backtest(
     win_rate = (100 * wins / len(trades_df)) if not trades_df.empty else 0.0
     total_pnl = float(trades_df["pnl"].sum()) if not trades_df.empty else 0.0
 
-    # Max drawdown ($ and %) from equity curve
-    if not equity_df.empty and not equity_df["cash"].empty:
-        run_max = equity_df["cash"].cummax()
-        dd = run_max - equity_df["cash"]
-        max_dd_val = float(dd.max()) if not dd.empty else 0.0
-        if max_dd_val > 0:
-            dd_idx = dd.idxmax()
-            max_dd_pct = (max_dd_val / run_max.loc[dd_idx]) * 100 if run_max.loc[dd_idx] != 0 else 0.0
-        else:
-            max_dd_pct = 0.0
-    else:
-        max_dd_val = 0.0; max_dd_pct = 0.0
-
     summary = {
         "trades": int(len(trades_df)),
         "wins": int(wins), "losses": int(losses),
         "breaches": int(breaches), "adx_exits": int(adx_exits),
         "vwap_exits": int(vwap_exits), "brokes": int(brokes),
         "win_rate": float(win_rate), "total_pnl": total_pnl,
-        "max_drawdown": max_dd_val, "max_drawdown_pct": max_dd_pct,  # keep % for UI
+        # use per-bar drawdown series for accurate max values
+        "max_drawdown": max_dd_val, "max_drawdown_pct": max_dd_pct,
     }
     rejected_df = pd.DataFrame(rejected)
     return df, trades_df, equity_df, summary, rejected_df
@@ -600,7 +606,7 @@ if has_csv:
         low_pl = float(pnl_series.min()) if len(pnl_series) > 0 else 0.0
         max_risk = float(max_risk_vec.max()) if len(max_risk_vec) > 0 else 0.0
 
-        # $ and % drawdown
+        # $ and % drawdown (from equity_df series computed post-run)
         max_dd_val = summary.get("max_drawdown", 0.0)
         max_dd_pct = summary.get("max_drawdown_pct", 0.0)
 
@@ -647,7 +653,7 @@ if has_csv:
         s2.metric("High P/L", f"${high_pl:.2f}", delta=f"{high_pl:+.2f}")
         s3.metric("Low P/L", f"${low_pl:.2f}", delta=f"{low_pl:+.2f}")
         s4.metric("Max Risk", f"${max_risk:.2f}")
-        # Drawdown shows $ value and % delta
+        # Drawdown shows $ value and % delta (from equity series)
         s5.metric("Max Drawdown", f"${max_dd_val:.2f}", delta=f"{-abs(max_dd_pct):.2f}%")
         s6.metric("Profit Factor", f"{profit_factor:.2f}" if not np.isnan(profit_factor) else "—")
 
@@ -701,14 +707,13 @@ if has_csv:
                 display_cols = ["date", "reasons", "adx", "rsi", "hv", "blackout"]
                 tbl = rejected_df.copy()
                 tbl["date"] = pd.to_datetime(tbl["date"]).dt.strftime("%Y-%m-%d %H:%M")
-                # Show the most recent evaluations first, capped
                 max_rows = 1000
                 tbl_sorted = tbl.sort_values("date")
                 if len(tbl_sorted) > max_rows:
                     tbl_sorted = tbl_sorted.tail(max_rows)
                 st.dataframe(tbl_sorted[display_cols], use_container_width=True, height=360)
 
-        # ===== Monthly P/L (calculated once from finalized trades) =====
+        # ===== Monthly P/L =====
         with st.expander("Monthly P/L", expanded=False):
             if trades_df.empty:
                 st.info("No trades for monthly summary.")
@@ -720,7 +725,7 @@ if has_csv:
 
         # ===== Equity Curve =====
         st.markdown("### Equity Curve")
-        if equity_df.empty:
+        if equity_df.empty or "cash" not in equity_df.columns:
             st.info("No equity curve.")
         else:
             fig_eq = go.Figure()
@@ -746,7 +751,7 @@ if has_csv:
                 start = e - timedelta(days=int(days_before))
                 end = e + timedelta(days=int(days_after))
                 fig_px.add_vrect(x0=start, x1=end, fillcolor="red", opacity=0.08, line_width=0)
-        if use_trend_biaS:=use_trend_bias:  # keep same behavior; small alias
+        if use_trend_bias:
             up_idx = df_out.index[df_out["trend_up"]]
             dn_idx = df_out.index[df_out["trend_down"]]
             fig_px.add_trace(go.Scatter(x=up_idx, y=df_out.loc[up_idx, "vwap"], name="Uptrend",
